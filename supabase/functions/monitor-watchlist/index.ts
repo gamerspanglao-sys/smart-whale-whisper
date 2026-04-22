@@ -122,10 +122,14 @@ Deno.serve(async (req) => {
 
       const { score, explanation } = computeScore(p7, p30, volRatio, volatility);
 
-      const history = (priorByCoin.get(c.id) ?? []).sort((a, b) => a.date.localeCompare(b.date));
+      // Exclude today's record so intra-day monitor runs don't increment days each time
+      const history = (priorByCoin.get(c.id) ?? [])
+        .filter((h) => h.date < today)
+        .sort((a, b) => a.date.localeCompare(b.date));
       const prior7 = [...history].reverse().find((h) => h.date <= sevenDaysAgo);
       const momentum = score - (prior7?.score ?? score);
 
+      // yesterday = last record from a previous calendar day
       const yesterday = history[history.length - 1];
       let days = 0;
       if (yesterday) {

@@ -113,6 +113,7 @@ const Index = () => {
 
   const [watchlist, setWatchlist] = useState<WatchlistItem[]>([]);
   const [watchlistSnapshots, setWatchlistSnapshots] = useState<Snapshot[]>([]);
+  const [watchlistHistory, setWatchlistHistory] = useState<Record<string, Snapshot[]>>({});
   const [watchlistLoading, setWatchlistLoading] = useState(false);
   const [monitoring, setMonitoring] = useState(false);
 
@@ -125,13 +126,14 @@ const Index = () => {
     setLoading(true);
     const { data: latest } = await supabase
       .from("asset_snapshots")
-      .select("snapshot_date")
-      .order("snapshot_date", { ascending: false })
+      .select("snapshot_date, created_at")
+      .order("created_at", { ascending: false })
       .limit(1);
 
     const date = latest?.[0]?.snapshot_date;
+    const ts = latest?.[0]?.created_at;
     if (!date) { setRows([]); setLoading(false); return; }
-    setLastRun(date);
+    setLastRun(ts ?? date);
 
     const { data } = await supabase
       .from("asset_snapshots")
@@ -155,10 +157,13 @@ const Index = () => {
     setWatchlist(items);
 
     if (items.length > 0) {
+      const coinIds = items.map((i) => i.coin_id);
+
+      // Latest snapshot for each coin
       const { data: latest } = await supabase
         .from("asset_snapshots")
-        .select("snapshot_date")
-        .order("snapshot_date", { ascending: false })
+        .select("snapshot_date, created_at")
+        .order("created_at", { ascending: false })
         .limit(1);
       const date = latest?.[0]?.snapshot_date;
       if (date) {
@@ -166,12 +171,27 @@ const Index = () => {
           .from("asset_snapshots")
           .select("*")
           .eq("snapshot_date", date)
-          .in("coin_id", items.map((i) => i.coin_id))
+          .in("coin_id", coinIds)
           .order("score", { ascending: false });
         setWatchlistSnapshots((snaps as unknown as Snapshot[]) ?? []);
       }
+
+      // Historical snapshots for last 7 days (for score trend)
+      const since = new Date(Date.now() - 7 * 86400000).toISOString().slice(0, 10);
+      const { data: hist } = await supabase
+        .from("asset_snapshots")
+        .select("coin_id, snapshot_date, score, signal, price, momentum")
+        .in("coin_id", coinIds)
+        .gte("snapshot_date", since)
+        .order("snapshot_date", { ascending: true });
+      const byId: Record<string, Snapshot[]> = {};
+      for (const h of (hist as unknown as Snapshot[]) ?? []) {
+        (byId[h.coin_id] ??= []).push(h);
+      }
+      setWatchlistHistory(byId);
     } else {
       setWatchlistSnapshots([]);
+      setWatchlistHistory({});
     }
     setWatchlistLoading(false);
   };
@@ -278,8 +298,8 @@ const Index = () => {
           </div>
           <div className="flex items-center gap-2">
             {lastRun && (
-              <span className="text-xs text-muted-foreground tabular hidden sm:inline">
-                Last scan: {lastRun}
+              <span className="text-xs text-muted-foreground tabular hidden sm:inline flex items-center gap-1">
+                <Clock className="size-3 inline" /> {fmt.time(lastRun)}
               </span>
             )}
             <Button onClick={runMonitor} disabled={monitoring} size="sm" variant="outline">
@@ -456,7 +476,7 @@ const Index = () => {
               <p className="text-sm text-muted-foreground">
                 {watchedIds.size === 0
                   ? "No coins in watchlist. Add from Scanner or they'll auto-add when score ≥ 7."
-                  : `${watchedIds.size} coin${watchedIds.size > 1 ? "s" : ""} under monitoring · refreshes every 2 hours`}
+                  : `${watchedIds.size} coin${watchedIds.size > 1 ? "s" : ""} under monitoring · auto-refresh every 30 min`}
               </p>
               <Button onClick={runMonitor} disabled={monitoring || watchedIds.size === 0} size="sm" variant="outline">
                 <Repeat2 className={`size-4 mr-2 ${monitoring ? "animate-spin" : ""}`} />
@@ -475,17 +495,18 @@ const Index = () => {
                     <TableHead className="text-right text-xs">Momentum</TableHead>
                     <TableHead className="text-right text-xs">Days</TableHead>
                     <TableHead className="text-xs">Trend</TableHead>
+                    <TableHead className="text-xs hidden md:table-cell">Score 7d</TableHead>
                     <TableHead className="text-xs">Signal</TableHead>
-                    <TableHead className="text-xs">Added</TableHead>
+                    <TableHead className="text-xs">Added / Checked</TableHead>
                     <TableHead className="w-10 text-xs"></TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {watchlistLoading ? (
-                    <TableRow><TableCell colSpan={10} className="text-center py-12 text-muted-foreground">Loading…</TableCell></TableRow>
+                    <TableRow><TableCell colSpan={11} className="text-center py-12 text-muted-foreground">Loading…</TableCell></TableRow>
                   ) : watchlist.filter((w) => w.active).length === 0 ? (
                     <TableRow>
-                      <TableCell colSpan={10} className="text-center py-12 text-muted-foreground">
+                      <TableCell colSpan={11} className="text-center py-12 text-muted-foreground">
                         Watchlist is empty. Add coins from the Scanner tab.
                       </TableCell>
                     </TableRow>
@@ -511,6 +532,23 @@ const Index = () => {
                           </TableCell>
                           <TableCell className="text-right tabular text-sm">{snap?.days_in_accumulation ?? "—"}</TableCell>
                           <TableCell>{snap ? <Sparkline data={snap.sparkline ?? []} /> : "—"}</TableCell>
+                          <TableCell className="hidden md:table-cell">
+                            {(() => {
+                              const h = watchlistHistory[w.coin_id] ?? [];
+                              if (h.length < 2) return <span className="text-xs text-muted-foreground">—</span>;
+                              const scores = h.map((x) => x.score);
+                              const first = scores[0], last = scores[scores.length - 1];
+                              const diff = last - first;
+                              return (
+                                <div className="flex items-center gap-2">
+                                  <Sparkline data={scores} />
+                                  <span className={`text-xs font-medium ${diff > 0 ? "text-success" : diff < 0 ? "text-destructive" : "text-muted-foreground"}`}>
+                                    {diff > 0 ? "+" : ""}{diff}
+                                  </span>
+                                </div>
+                              );
+                            })()}
+                          </TableCell>
                           <TableCell>{snap ? <SignalBadge signal={snap.signal} /> : "—"}</TableCell>
                           <TableCell className="text-xs text-muted-foreground whitespace-nowrap">
                             <div>{fmt.time(w.added_at)}</div>

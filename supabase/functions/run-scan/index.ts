@@ -136,10 +136,27 @@ Deno.serve(async (req) => {
 
     // Filters: market cap > $30M, volume > $2M, age > 6 months
     const sixMonthsAgo = Date.now() - 1000 * 60 * 60 * 24 * 180;
+    const STABLE_SYMBOLS = new Set([
+      "USDT","USDC","DAI","BUSD","TUSD","USDP","USDD","FDUSD","PYUSD","GUSD",
+      "FRAX","LUSD","USDE","USDS","CRVUSD","MIM","SUSD","EURS","EURT","EURC",
+      "USTC","USDJ","HUSD","USDX","XAUT","PAXG","RSR","USD0","USDY","USDB",
+      "AEUR","CUSD","OUSD","DOLA","ALUSD","MUSD","USDV","FXUSD","USDM"
+    ]);
+    const isStableName = (name: string, sym: string) => {
+      const s = sym.toUpperCase();
+      if (STABLE_SYMBOLS.has(s)) return true;
+      if (/^US?D[A-Z0-9]?$/.test(s)) return true; // USDx variants
+      if (/usd|euro|tether|stablecoin|dollar/i.test(name)) return true;
+      return false;
+    };
     const qualified = all.filter((c) => {
       if (!c.market_cap || c.market_cap < 30_000_000) return false;
       if (!c.total_volume || c.total_volume < 2_000_000) return false;
       if (c.atl_date && new Date(c.atl_date).getTime() > sixMonthsAgo) return false;
+      if (isStableName(c.name, c.symbol)) return false;
+      // Extra safety: anything pegged near $1 with tiny 30d move is likely a stable
+      const p30 = c.price_change_percentage_30d_in_currency ?? 0;
+      if (c.current_price > 0.95 && c.current_price < 1.05 && Math.abs(p30) < 2) return false;
       return true;
     });
 

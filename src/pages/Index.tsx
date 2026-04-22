@@ -128,7 +128,8 @@ const Index = () => {
     });
   }, [rows, search, signalFilter, minScore, minMomentum]);
 
-  const top15 = filtered.slice(0, 15);
+  const [showLimit, setShowLimit] = useState(25);
+  const topRows = filtered.slice(0, showLimit);
   const strongCount = rows.filter((r) => r.signal === "Strong").length;
   const watchCount = rows.filter((r) => r.signal === "Watchlist").length;
 
@@ -218,8 +219,16 @@ const Index = () => {
               <SelectItem value="strong">Momentum ≥ 3</SelectItem>
             </SelectContent>
           </Select>
-          <span className="text-xs text-muted-foreground ml-auto">
-            Showing top {top15.length} of {filtered.length}
+          <span className="text-xs text-muted-foreground ml-auto flex items-center gap-2">
+            Showing {topRows.length} of {filtered.length}
+            {filtered.length > showLimit && (
+              <button
+                onClick={() => setShowLimit((l) => l + 25)}
+                className="underline text-primary hover:opacity-80"
+              >
+                Show more
+              </button>
+            )}
           </span>
         </div>
 
@@ -244,7 +253,7 @@ const Index = () => {
             <TableBody>
               {loading ? (
                 <TableRow><TableCell colSpan={11} className="text-center py-12 text-muted-foreground">Loading…</TableCell></TableRow>
-              ) : top15.length === 0 ? (
+              ) : topRows.length === 0 ? (
                 <TableRow>
                   <TableCell colSpan={11} className="text-center py-12 text-muted-foreground">
                     {rows.length === 0
@@ -253,7 +262,7 @@ const Index = () => {
                   </TableCell>
                 </TableRow>
               ) : (
-                top15.map((r, idx) => (
+                topRows.map((r, idx) => (
                   <TableRow
                     key={r.coin_id}
                     className={`border-border ${

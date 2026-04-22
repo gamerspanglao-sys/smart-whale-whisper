@@ -108,8 +108,10 @@ function computeScore(d: ScoreInput): { score: number; explanation: string } {
   return { score: Math.max(-5, Math.min(10, score)), explanation: exp };
 }
 
-function classify(score: number, momentum: number, volatility: number, p7: number) {
-  if (score >= 7 && momentum >= 3 && volatility < 0.7 && p7 < 15) {
+function classify(score: number, momentum: number, volatility: number, p7: number, hasPriorHistory: boolean) {
+  // On day-1 (no prior history) momentum is always 0 — use lower bar for Strong
+  const momentumOk = hasPriorHistory ? momentum >= 3 : momentum >= 0;
+  if (score >= 7 && momentumOk && volatility < 0.7 && p7 < 15) {
     return { signal: "Strong", phase: "Accumulation" };
   }
   if (momentum < 0 || p7 > 25) return { signal: "Avoid", phase: "Distribution" };
@@ -137,26 +139,42 @@ Deno.serve(async (req) => {
     // Filters: market cap > $30M, volume > $2M, age > 6 months
     const sixMonthsAgo = Date.now() - 1000 * 60 * 60 * 24 * 180;
     const STABLE_SYMBOLS = new Set([
+      // USD-pegged
       "USDT","USDC","DAI","BUSD","TUSD","USDP","USDD","FDUSD","PYUSD","GUSD",
-      "FRAX","LUSD","USDE","USDS","CRVUSD","MIM","SUSD","EURS","EURT","EURC",
-      "USTC","USDJ","HUSD","USDX","XAUT","PAXG","RSR","USD0","USDY","USDB",
-      "AEUR","CUSD","OUSD","DOLA","ALUSD","MUSD","USDV","FXUSD","USDM"
+      "FRAX","LUSD","USDE","USDS","CRVUSD","MIM","SUSD","USTC","USDJ","HUSD",
+      "USDX","USD0","USDY","USDB","CUSD","OUSD","DOLA","ALUSD","MUSD","USDV",
+      "FXUSD","USDM","XUSD","AUSD","RLUSD","USD1","GHO","USDBC","USDS","BOLD",
+      "MKUSD","COEUR","USDZ","USDA","USDD","USDX","EUSD","USDF","FRXUSD",
+      // EUR-pegged
+      "EURS","EURT","EURC","EURCV","AEUR","EURA","AGEUR",
+      // Precious metals
+      "XAUT","PAXG",
+      // Other
+      "RSR",
     ]);
-    const isStableName = (name: string, sym: string) => {
+    const isStableName = (name: string, sym: string, price: number, p7: number, p30: number, vol: number) => {
       const s = sym.toUpperCase();
       if (STABLE_SYMBOLS.has(s)) return true;
-      if (/^US?D[A-Z0-9]?$/.test(s)) return true; // USDx variants
+      // Symbol pattern: USD variants, EUR variants
+      if (/^US?D[A-Z0-9]{0,3}$/.test(s)) return true;
+      if (/^EUR[A-Z0-9]{0,3}$/.test(s)) return true;
       if (/usd|euro|tether|stablecoin|dollar/i.test(name)) return true;
+      // Behaviour-based: very low volatility + pegged price ± 10% + almost no price movement
+      const peggedNearDollar = price > 0.90 && price < 1.10;
+      const peggedNearEuro = price > 1.00 && price < 1.25;
+      const frozen = Math.abs(p7) < 1 && Math.abs(p30) < 3;
+      if ((peggedNearDollar || peggedNearEuro) && frozen && vol < 0.15) return true;
       return false;
     };
     const qualified = all.filter((c) => {
       if (!c.market_cap || c.market_cap < 30_000_000) return false;
       if (!c.total_volume || c.total_volume < 2_000_000) return false;
       if (c.atl_date && new Date(c.atl_date).getTime() > sixMonthsAgo) return false;
-      if (isStableName(c.name, c.symbol)) return false;
-      // Extra safety: anything pegged near $1 with tiny 30d move is likely a stable
+      const p7 = c.price_change_percentage_7d_in_currency ?? 0;
       const p30 = c.price_change_percentage_30d_in_currency ?? 0;
-      if (c.current_price > 0.95 && c.current_price < 1.05 && Math.abs(p30) < 2) return false;
+      const sparkline = c.sparkline_in_7d?.price ?? [];
+      const { volatility } = computeFromSparkline(sparkline);
+      if (isStableName(c.name, c.symbol, c.current_price, p7, p30, volatility)) return false;
       return true;
     });
 
@@ -203,7 +221,8 @@ Deno.serve(async (req) => {
         if (score > yesterday.score || score >= 6) days = (yesterday.days ?? 0) + 1;
       } else if (score >= 6) days = 1;
 
-      const { signal, phase } = classify(score, momentum, volatility, p7);
+      const hasPriorHistory = history.length > 0;
+      const { signal, phase } = classify(score, momentum, volatility, p7, hasPriorHistory);
 
       // Downsample sparkline to 7 daily points for the UI
       const sparkDaily: number[] = [];

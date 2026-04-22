@@ -24,6 +24,7 @@ export type Database = {
           added_by: string
           notes: string | null
           active: boolean
+          last_monitored_at: string | null
         }
         Insert: {
           id?: number

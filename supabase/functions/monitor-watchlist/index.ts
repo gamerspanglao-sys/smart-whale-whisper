@@ -1,4 +1,4 @@
-// Watchlist Monitor — runs every 2 hours, tracks only watchlisted coins
+// Watchlist Monitor — runs every 30 minutes, tracks only watchlisted coins
 import { createClient } from "jsr:@supabase/supabase-js@2";
 
 const corsHeaders = {
@@ -15,6 +15,7 @@ interface CGCoin {
   current_price: number;
   market_cap: number;
   total_volume: number;
+  price_change_percentage_1h_in_currency: number | null;
   price_change_percentage_7d_in_currency: number | null;
   price_change_percentage_30d_in_currency: number | null;
   sparkline_in_7d?: { price: number[] };
@@ -87,8 +88,8 @@ Deno.serve(async (req) => {
 
     const ids = watchlistRows.map((w) => w.coin_id).join(",");
 
-    // Fetch current market data for watchlist coins only
-    const cgUrl = `${CG}/coins/markets?vs_currency=usd&ids=${ids}&order=market_cap_desc&per_page=250&page=1&sparkline=true&price_change_percentage=7d,30d`;
+    // Fetch current market data — include 1h price change
+    const cgUrl = `${CG}/coins/markets?vs_currency=usd&ids=${ids}&order=market_cap_desc&per_page=250&page=1&sparkline=true&price_change_percentage=1h,7d,30d`;
     const cgRes = await fetch(cgUrl, { headers: { accept: "application/json" } });
     if (!cgRes.ok) throw new Error(`CoinGecko failed: ${cgRes.status}`);
     const coins: CGCoin[] = await cgRes.json();
@@ -96,10 +97,10 @@ Deno.serve(async (req) => {
     const today = new Date().toISOString().slice(0, 10);
     const sevenDaysAgo = new Date(Date.now() - 7 * 86400000).toISOString().slice(0, 10);
 
-    // Pull prior scores for momentum
+    // Pull prior scores + last known price for this coin
     const { data: priorRows } = await supabase
       .from("asset_snapshots")
-      .select("coin_id, snapshot_date, score, signal, days_in_accumulation, price")
+      .select("coin_id, snapshot_date, score, signal, days_in_accumulation, price, created_at")
       .in("coin_id", watchlistRows.map((w) => w.coin_id))
       .gte("snapshot_date", new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10))
       .order("snapshot_date", { ascending: false });
@@ -114,6 +115,7 @@ Deno.serve(async (req) => {
     const snapshots = coins.map((c) => {
       const sparkline = c.sparkline_in_7d?.price ?? [];
       const volatility = computeVolatility(sparkline);
+      const p1h = c.price_change_percentage_1h_in_currency ?? 0;
       const p7 = c.price_change_percentage_7d_in_currency ?? 0;
       const p30 = c.price_change_percentage_30d_in_currency ?? 0;
       const volRatio = c.total_volume / Math.max(c.market_cap, 1);
@@ -159,24 +161,44 @@ Deno.serve(async (req) => {
         phase,
         explanation,
         sparkline: sparkDaily,
+        // Store 1h change in explanation suffix for UI access
+        _p1h: p1h,
+        _prev_price: yesterday?.price ?? null,
       };
     });
 
-    // Upsert snapshots (updates today's record if already exists from daily scan)
-    if (snapshots.length > 0) {
+    // Upsert snapshots
+    const dbRows = snapshots.map(({ _p1h: _, _prev_price: __, ...rest }) => rest);
+    if (dbRows.length > 0) {
       const { error: upErr } = await supabase
         .from("asset_snapshots")
-        .upsert(snapshots, { onConflict: "coin_id,snapshot_date" });
+        .upsert(dbRows, { onConflict: "coin_id,snapshot_date" });
       if (upErr) throw upErr;
     }
 
-    // Generate alerts for signal / score changes
+    // Generate alerts: signal change, score change, price spike
     const alerts: object[] = [];
     for (const snap of snapshots) {
       const history = priorByCoin.get(snap.coin_id) ?? [];
-      const prev = history[history.length - 1]; // most recent prior
+      const prev = history[history.length - 1];
+
+      // 1h price spike alert (independent of prior DB history)
+      if (Math.abs(snap._p1h) >= 5) {
+        alerts.push({
+          coin_id: snap.coin_id,
+          symbol: snap.symbol,
+          name: snap.name,
+          alert_type: snap._p1h > 0 ? "price_spike_up" : "price_spike_down",
+          old_value: null,
+          new_value: `${snap._p1h > 0 ? "+" : ""}${snap._p1h.toFixed(2)}%`,
+          score: snap.score,
+          price: snap.price,
+        });
+      }
+
       if (!prev) continue;
 
+      // Signal change
       if (prev.signal !== snap.signal) {
         alerts.push({
           coin_id: snap.coin_id,
@@ -216,6 +238,12 @@ Deno.serve(async (req) => {
     if (alerts.length > 0) {
       await supabase.from("price_alerts").insert(alerts);
     }
+
+    // Update watchlist last_monitored_at
+    await supabase
+      .from("watchlist")
+      .update({ last_monitored_at: new Date().toISOString() })
+      .in("coin_id", watchlistRows.map((w) => w.coin_id));
 
     return new Response(
       JSON.stringify({

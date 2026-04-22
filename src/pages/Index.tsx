@@ -33,6 +33,8 @@ import {
   ArrowUpCircle,
   ArrowDownCircle,
   Repeat2,
+  Zap,
+  Clock,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -63,6 +65,7 @@ interface WatchlistItem {
   added_at: string;
   added_by: string;
   active: boolean;
+  last_monitored_at: string | null;
 }
 
 interface PriceAlert {
@@ -510,7 +513,13 @@ const Index = () => {
                           <TableCell>{snap ? <Sparkline data={snap.sparkline ?? []} /> : "—"}</TableCell>
                           <TableCell>{snap ? <SignalBadge signal={snap.signal} /> : "—"}</TableCell>
                           <TableCell className="text-xs text-muted-foreground whitespace-nowrap">
-                            {fmt.time(w.added_at)}
+                            <div>{fmt.time(w.added_at)}</div>
+                            {w.last_monitored_at && (
+                              <div className="flex items-center gap-1 text-[10px] text-primary/70 mt-0.5">
+                                <Clock className="size-2.5" />
+                                {fmt.time(w.last_monitored_at)}
+                              </div>
+                            )}
                           </TableCell>
                           <TableCell>
                             <button
@@ -611,6 +620,16 @@ const AlertIcon = ({ type }: { type: string }) => {
   if (type === "score_up") return (
     <span className="inline-flex items-center gap-1 text-xs text-success font-medium">
       <ArrowUpCircle className="size-3" /> Score up
+    </span>
+  );
+  if (type === "price_spike_up") return (
+    <span className="inline-flex items-center gap-1 text-xs text-success font-medium">
+      <Zap className="size-3" /> Price spike ↑
+    </span>
+  );
+  if (type === "price_spike_down") return (
+    <span className="inline-flex items-center gap-1 text-xs text-destructive font-medium">
+      <Zap className="size-3" /> Price spike ↓
     </span>
   );
   return (

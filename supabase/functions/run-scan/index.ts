@@ -355,16 +355,14 @@ Deno.serve(async (req) => {
     }
     // ────────────────────────────────────────────────────────────────────────
 
-    await supabase.from("scan_runs").upsert(
-      {
-        run_date: today,
-        assets_scanned: all.length,
-        assets_qualified: qualified.length,
-        duration_ms: Date.now() - started,
-        triggered_by: triggeredBy,
-      },
-      { onConflict: "run_date" },
-    );
+    // Insert (not upsert) so each scan gets its own created_at
+    await supabase.from("scan_runs").insert({
+      run_date: today,
+      assets_scanned: all.length,
+      assets_qualified: qualified.length,
+      duration_ms: Date.now() - started,
+      triggered_by: triggeredBy,
+    });
 
     return new Response(
       JSON.stringify({

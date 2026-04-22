@@ -124,14 +124,23 @@ const Index = () => {
 
   const load = async () => {
     setLoading(true);
+
+    // Last actual scan time comes from scan_runs (each run = new row)
+    const { data: lastScanRow } = await supabase
+      .from("scan_runs")
+      .select("created_at, run_date")
+      .order("created_at", { ascending: false })
+      .limit(1);
+    const ts = lastScanRow?.[0]?.created_at;
+
+    // Pick the latest snapshot_date that has data
     const { data: latest } = await supabase
       .from("asset_snapshots")
-      .select("snapshot_date, created_at")
-      .order("created_at", { ascending: false })
+      .select("snapshot_date")
+      .order("snapshot_date", { ascending: false })
       .limit(1);
 
     const date = latest?.[0]?.snapshot_date;
-    const ts = latest?.[0]?.created_at;
     if (!date) { setRows([]); setLoading(false); return; }
     setLastRun(ts ?? date);
 

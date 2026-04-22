@@ -20,6 +20,8 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Sparkline } from "@/components/Sparkline";
 import { SignalBadge } from "@/components/SignalBadge";
+import { LevelBadge } from "@/components/LevelBadge";
+import { compareAvoidSeverity, compareLongConviction, displayTiers } from "@/lib/tradeLevels";
 import {
   Activity,
   RefreshCw,
@@ -58,6 +60,8 @@ interface Snapshot {
   price_change_30d: number | null;
   signal: string;
   phase: string;
+  buy_tier?: string | null;
+  sell_tier?: string | null;
   explanation: string | null;
   sparkline: number[] | null;
 }
@@ -369,22 +373,14 @@ const Index = () => {
 
     const avoidMode = signalFilter === "Avoid";
     list.sort((a, b) => {
-      if (avoidMode) {
-        // Worst / most “destructive” first: weakest momentum, then worst 7d dump
-        if (a.momentum !== b.momentum) return a.momentum - b.momentum;
-        const p7a = a.price_change_7d ?? 0;
-        const p7b = b.price_change_7d ?? 0;
-        if (p7a !== p7b) return p7a - p7b;
-        return a.score - b.score;
-      }
+      if (avoidMode) return compareAvoidSeverity(a, b);
       if (signalFilter === "all") {
         const ta = SIGNAL_STRENGTH_RANK[a.signal] ?? 0;
         const tb = SIGNAL_STRENGTH_RANK[b.signal] ?? 0;
         if (ta !== tb) return tb - ta;
       }
       if (b.score !== a.score) return b.score - a.score;
-      if (b.momentum !== a.momentum) return b.momentum - a.momentum;
-      return a.symbol.localeCompare(b.symbol);
+      return compareLongConviction(a, b);
     });
     return list;
   }, [rows, search, signalFilter, minScore, minMomentum]);
@@ -507,10 +503,10 @@ const Index = () => {
             </div>
             <p className="text-[11px] text-muted-foreground">
               {signalFilter === "Avoid"
-                ? "Order: most negative momentum first, then worst 7d return (severe Avoid on top)."
+                ? "Order: exit severity (Critical → Caution), then weakest momentum and 7d."
                 : signalFilter === "all"
-                  ? "Order: Strong → Watchlist → Avoid, then highest score, then momentum."
-                  : "Order: highest score first, then momentum."}
+                  ? "Order: Strong → Watchlist → Neutral → Avoid, then score, then buy level / momentum / days / volatility."
+                  : "Order: highest score first, then buy level and quality tie-breakers (see Level column)."}
             </p>
 
             <div className="rounded-lg border border-border bg-card overflow-hidden shadow-[var(--shadow-card)]">
@@ -528,16 +524,17 @@ const Index = () => {
                     <TableHead className="text-right text-xs">Days</TableHead>
                     <TableHead className="text-xs">Trend</TableHead>
                     <TableHead className="text-xs">Signal</TableHead>
+                    <TableHead className="text-xs hidden md:table-cell min-w-[140px]">Buy / exit</TableHead>
                     <TableHead className="text-xs hidden lg:table-cell min-w-[280px]">Why buy now</TableHead>
                     <TableHead className="w-10 text-xs"></TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {loading ? (
-                    <TableRow><TableCell colSpan={13} className="text-center py-12 text-muted-foreground">Loading…</TableCell></TableRow>
+                    <TableRow><TableCell colSpan={14} className="text-center py-12 text-muted-foreground">Loading…</TableCell></TableRow>
                   ) : topRows.length === 0 ? (
                     <TableRow>
-                      <TableCell colSpan={13} className="text-center py-12 text-muted-foreground">
+                      <TableCell colSpan={14} className="text-center py-12 text-muted-foreground">
                         {rows.length === 0 ? "No data yet. Click 'Run Scan'." : "No assets match filters."}
                       </TableCell>
                     </TableRow>
@@ -571,6 +568,12 @@ const Index = () => {
                             <TableCell className="text-right tabular text-sm">{r.days_in_accumulation}</TableCell>
                             <TableCell><Sparkline data={r.sparkline ?? []} /></TableCell>
                             <TableCell><SignalBadge signal={r.signal} /></TableCell>
+                            <TableCell className="hidden md:table-cell align-top">
+                              {(() => {
+                                const { buy, sell } = displayTiers(r);
+                                return <LevelBadge buy={buy} sell={sell} />;
+                              })()}
+                            </TableCell>
                             <TableCell className="text-xs hidden lg:table-cell max-w-[360px]">
                               <span
                                 className={r.signal === "Strong" ? "text-foreground" : r.signal === "Avoid" ? "text-destructive/80" : "text-muted-foreground"}
@@ -601,7 +604,7 @@ const Index = () => {
                           </TableRow>
                           {isOpen && criteria && (
                             <TableRow className="bg-muted/30 border-border">
-                              <TableCell colSpan={13} className="p-0">
+                              <TableCell colSpan={14} className="p-0">
                                 <CriteriaBreakdown snap={r} criteria={criteria} />
                               </TableCell>
                             </TableRow>
@@ -645,6 +648,7 @@ const Index = () => {
                     <TableHead className="text-xs">Trend</TableHead>
                     <TableHead className="text-xs hidden md:table-cell">Score 7d</TableHead>
                     <TableHead className="text-xs">Signal</TableHead>
+                    <TableHead className="text-xs hidden lg:table-cell min-w-[140px]">Buy / exit</TableHead>
                     <TableHead className="text-xs hidden xl:table-cell min-w-[260px]">Why buy now</TableHead>
                     <TableHead className="text-xs">Added / Checked</TableHead>
                     <TableHead className="w-10 text-xs"></TableHead>
@@ -652,10 +656,10 @@ const Index = () => {
                 </TableHeader>
                 <TableBody>
                   {watchlistLoading ? (
-                    <TableRow><TableCell colSpan={12} className="text-center py-12 text-muted-foreground">Loading…</TableCell></TableRow>
+                    <TableRow><TableCell colSpan={13} className="text-center py-12 text-muted-foreground">Loading…</TableCell></TableRow>
                   ) : watchlist.filter((w) => w.active).length === 0 ? (
                     <TableRow>
-                      <TableCell colSpan={12} className="text-center py-12 text-muted-foreground">
+                      <TableCell colSpan={13} className="text-center py-12 text-muted-foreground">
                         Watchlist is empty. Add coins from the Scanner tab.
                       </TableCell>
                     </TableRow>
@@ -699,6 +703,9 @@ const Index = () => {
                             })()}
                           </TableCell>
                           <TableCell>{snap ? <SignalBadge signal={snap.signal} /> : "—"}</TableCell>
+                          <TableCell className="hidden lg:table-cell align-top">
+                            {snap ? <LevelBadge {...displayTiers(snap)} /> : "—"}
+                          </TableCell>
                           <TableCell className="text-xs hidden xl:table-cell max-w-[340px]">
                             <span
                               className={snap?.signal === "Strong" ? "text-foreground" : snap?.signal === "Avoid" ? "text-destructive/80" : "text-muted-foreground"}
@@ -853,8 +860,17 @@ const CriteriaBreakdown = ({ snap, criteria }: { snap: Snapshot; criteria: Crite
   const positiveSum = criteria.filter((c) => c.triggered && c.weight > 0).reduce((s, c) => s + c.weight, 0);
   const negativeSum = criteria.filter((c) => c.triggered && c.weight < 0).reduce((s, c) => s + c.weight, 0);
 
+  const tiers = displayTiers(snap);
   return (
     <div className="px-6 py-4 space-y-4">
+      <div>
+        <h4 className="text-sm font-semibold mb-2">Buy / exit level</h4>
+        <LevelBadge buy={tiers.buy} sell={tiers.sell} />
+        <p className="text-[11px] text-muted-foreground mt-2 max-w-2xl">
+          Same score does not mean the same conviction: the level uses momentum, days in accumulation, and 7d price to rank quality.
+          This is opinionated heuristics, not financial advice.
+        </p>
+      </div>
       {/* Raw metrics */}
       <div className="grid grid-cols-2 md:grid-cols-5 gap-3 text-xs">
         <Metric label="Price" value={fmt.price(snap.price)} />

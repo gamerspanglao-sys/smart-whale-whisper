@@ -89,6 +89,7 @@ export type Database = {
       }
       asset_snapshots: {
         Row: {
+          buy_tier: string | null
           coin_id: string
           created_at: string
           days_in_accumulation: number
@@ -102,6 +103,7 @@ export type Database = {
           price_change_30d: number | null
           price_change_7d: number | null
           score: number
+          sell_tier: string | null
           signal: string
           snapshot_date: string
           sparkline: Json | null
@@ -111,6 +113,7 @@ export type Database = {
           volume_change_7d: number | null
         }
         Insert: {
+          buy_tier?: string | null
           coin_id: string
           created_at?: string
           days_in_accumulation?: number
@@ -124,6 +127,7 @@ export type Database = {
           price_change_30d?: number | null
           price_change_7d?: number | null
           score: number
+          sell_tier?: string | null
           signal: string
           snapshot_date: string
           sparkline?: Json | null
@@ -133,6 +137,7 @@ export type Database = {
           volume_change_7d?: number | null
         }
         Update: {
+          buy_tier?: string | null
           coin_id?: string
           created_at?: string
           days_in_accumulation?: number
@@ -146,6 +151,7 @@ export type Database = {
           price_change_30d?: number | null
           price_change_7d?: number | null
           score?: number
+          sell_tier?: string | null
           signal?: string
           snapshot_date?: string
           sparkline?: Json | null

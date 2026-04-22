@@ -87,6 +87,40 @@ function classify(score: number, momentum: number, volatility: number, p7: numbe
   return { signal: "Neutral", phase: "Neutral" };
 }
 
+function assignTradeLevels(
+  signal: string,
+  score: number,
+  momentum: number,
+  p7: number,
+  daysInAccumulation: number,
+): { buy_tier: string | null; sell_tier: string | null } {
+  if (signal === "Avoid") {
+    if (p7 > 25 || p7 <= -18 || momentum <= -4) {
+      return { buy_tier: null, sell_tier: "Critical exit — heavy distribution or crash risk" };
+    }
+    if (p7 <= -10 || momentum <= -2) {
+      return { buy_tier: null, sell_tier: "Strong exit — reduce exposure" };
+    }
+    return { buy_tier: null, sell_tier: "Caution — do not add, favour selling" };
+  }
+  if (signal === "Strong") {
+    if (score >= 8 && momentum >= 3 && daysInAccumulation >= 2) {
+      return { buy_tier: "Very strong buy — high conviction", sell_tier: null };
+    }
+    if (score >= 8 || momentum >= 4) {
+      return { buy_tier: "Strong buy — favourable zone", sell_tier: null };
+    }
+    return { buy_tier: "Strong — accumulation (confirm size)", sell_tier: null };
+  }
+  if (signal === "Watchlist") {
+    if (score >= 7) return { buy_tier: "Solid buy watch — near strong", sell_tier: null };
+    if (score >= 6) return { buy_tier: "Moderate — build slowly", sell_tier: null };
+    return { buy_tier: "Light — early interest only", sell_tier: null };
+  }
+  if (score >= 4) return { buy_tier: "Speculative — weak edge", sell_tier: null };
+  return { buy_tier: "No setup — wait", sell_tier: null };
+}
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
 
@@ -161,6 +195,7 @@ Deno.serve(async (req) => {
 
       const hasPriorHistory = history.length > 0;
       const { signal, phase } = classify(score, momentum, volatility, p7, hasPriorHistory);
+      const { buy_tier, sell_tier } = assignTradeLevels(signal, score, momentum, p7, days);
 
       const sparkDaily: number[] = [];
       if (sparkline.length) {
@@ -186,6 +221,8 @@ Deno.serve(async (req) => {
         volume_change_7d: null,
         signal,
         phase,
+        buy_tier,
+        sell_tier,
         explanation,
         sparkline: sparkDaily,
         // Store 1h change in explanation suffix for UI access

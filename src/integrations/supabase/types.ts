@@ -14,6 +14,78 @@ export type Database = {
   }
   public: {
     Tables: {
+      watchlist: {
+        Row: {
+          id: number
+          coin_id: string
+          symbol: string
+          name: string
+          added_at: string
+          added_by: string
+          notes: string | null
+          active: boolean
+        }
+        Insert: {
+          id?: number
+          coin_id: string
+          symbol: string
+          name: string
+          added_at?: string
+          added_by?: string
+          notes?: string | null
+          active?: boolean
+        }
+        Update: {
+          id?: number
+          coin_id?: string
+          symbol?: string
+          name?: string
+          added_at?: string
+          added_by?: string
+          notes?: string | null
+          active?: boolean
+        }
+        Relationships: []
+      }
+      price_alerts: {
+        Row: {
+          id: number
+          coin_id: string
+          symbol: string
+          name: string
+          alert_type: string
+          old_value: string | null
+          new_value: string | null
+          score: number | null
+          price: number | null
+          created_at: string
+        }
+        Insert: {
+          id?: number
+          coin_id: string
+          symbol: string
+          name?: string
+          alert_type: string
+          old_value?: string | null
+          new_value?: string | null
+          score?: number | null
+          price?: number | null
+          created_at?: string
+        }
+        Update: {
+          id?: number
+          coin_id?: string
+          symbol?: string
+          name?: string
+          alert_type?: string
+          old_value?: string | null
+          new_value?: string | null
+          score?: number | null
+          price?: number | null
+          created_at?: string
+        }
+        Relationships: []
+      }
       asset_snapshots: {
         Row: {
           coin_id: string

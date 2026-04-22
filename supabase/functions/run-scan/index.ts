@@ -260,6 +260,101 @@ Deno.serve(async (req) => {
       .upsert(rows, { onConflict: "coin_id,snapshot_date" });
     if (upErr) throw upErr;
 
+    // ── Watchlist: auto-add coins with score >= 7, remove "Avoid" ──────────
+    const { data: existingWatchlist } = await supabase
+      .from("watchlist")
+      .select("coin_id, symbol, name")
+      .eq("active", true);
+
+    const watchedIds = new Set((existingWatchlist ?? []).map((w) => w.coin_id));
+
+    // Auto-add strong candidates not yet on watchlist
+    const toAdd = rows.filter((r) => r.score >= 7 && r.signal !== "Avoid" && !watchedIds.has(r.coin_id));
+    if (toAdd.length > 0) {
+      await supabase.from("watchlist").upsert(
+        toAdd.map((r) => ({
+          coin_id: r.coin_id,
+          symbol: r.symbol,
+          name: r.name,
+          added_by: "auto",
+          active: true,
+        })),
+        { onConflict: "coin_id" },
+      );
+    }
+
+    // Deactivate watchlist entries that turned "Avoid"
+    const toDeactivate = rows.filter((r) => r.signal === "Avoid" && watchedIds.has(r.coin_id));
+    if (toDeactivate.length > 0) {
+      await supabase
+        .from("watchlist")
+        .update({ active: false })
+        .in("coin_id", toDeactivate.map((r) => r.coin_id));
+    }
+
+    // ── Alerts: signal changes for watchlist coins ───────────────────────────
+    const { data: prevSnapshots } = await supabase
+      .from("asset_snapshots")
+      .select("coin_id, signal, score, price")
+      .in("coin_id", [...watchedIds])
+      .lt("snapshot_date", today)
+      .order("snapshot_date", { ascending: false });
+
+    // Keep only the most recent snapshot per coin
+    const prevByCoin = new Map<string, { signal: string; score: number; price: number }>();
+    for (const s of prevSnapshots ?? []) {
+      if (!prevByCoin.has(s.coin_id)) {
+        prevByCoin.set(s.coin_id, { signal: s.signal, score: s.score, price: s.price });
+      }
+    }
+
+    const alerts: object[] = [];
+    for (const r of rows) {
+      if (!watchedIds.has(r.coin_id)) continue;
+      const prev = prevByCoin.get(r.coin_id);
+      if (!prev) continue;
+
+      if (prev.signal !== r.signal) {
+        alerts.push({
+          coin_id: r.coin_id,
+          symbol: r.symbol,
+          name: r.name,
+          alert_type: "signal_change",
+          old_value: prev.signal,
+          new_value: r.signal,
+          score: r.score,
+          price: r.price,
+        });
+      } else if (r.score - prev.score >= 3) {
+        alerts.push({
+          coin_id: r.coin_id,
+          symbol: r.symbol,
+          name: r.name,
+          alert_type: "score_up",
+          old_value: String(prev.score),
+          new_value: String(r.score),
+          score: r.score,
+          price: r.price,
+        });
+      } else if (prev.score - r.score >= 3) {
+        alerts.push({
+          coin_id: r.coin_id,
+          symbol: r.symbol,
+          name: r.name,
+          alert_type: "score_down",
+          old_value: String(prev.score),
+          new_value: String(r.score),
+          score: r.score,
+          price: r.price,
+        });
+      }
+    }
+
+    if (alerts.length > 0) {
+      await supabase.from("price_alerts").insert(alerts);
+    }
+    // ────────────────────────────────────────────────────────────────────────
+
     await supabase.from("scan_runs").upsert(
       {
         run_date: today,
@@ -276,6 +371,8 @@ Deno.serve(async (req) => {
         success: true,
         scanned: all.length,
         qualified: qualified.length,
+        watchlist_added: toAdd.length,
+        alerts_generated: alerts.length,
         duration_ms: Date.now() - started,
       }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } },

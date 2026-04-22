@@ -38,21 +38,44 @@ function computeVolatility(prices: number[]): number {
 
 function computeScore(p7: number, p30: number, volRatio: number, volatility: number): { score: number; explanation: string } {
   let score = 0;
-  const reasons: string[] = [];
+  const reasons: { weight: number; text: string }[] = [];
   const flat = Math.abs(p7) < 5;
   const compressed = volatility > 0 && volatility < 0.6;
+  const volPct = (volRatio * 100).toFixed(1);
 
-  if (volRatio > 0.05 && flat) { score += 2; reasons.push("high turnover with flat price"); }
-  if (volRatio > 0.08)         { score += 2; reasons.push("elevated volume vs market cap"); }
-  if (flat && volRatio > 0.04) { score += 2; reasons.push("volume rising while price flat"); }
-  if (compressed)              { score += 1; reasons.push("low volatility compression"); }
-  if (p30 < 0 && p7 > -2 && p7 < 4) { score += 2; reasons.push("base building after 30d drawdown"); }
-  if (p7 > 25)                 { score -= 3; reasons.push("large 7d pump"); }
-  if (p7 < -10 && volRatio > 0.06) { score -= 2; reasons.push("high-volume breakdown"); }
+  if (volRatio > 0.05 && flat) {
+    score += 2;
+    reasons.push({ weight: 2, text: `Heavy trading (${volPct}% of mcap/day) with flat price — classic stealth accumulation by large players` });
+  }
+  if (volRatio > 0.08) {
+    score += 2;
+    reasons.push({ weight: 2, text: `Volume is ${volPct}% of market cap — unusually high turnover signals strong interest` });
+  }
+  if (flat && volRatio > 0.04) {
+    score += 2;
+    reasons.push({ weight: 2, text: `Price barely moves but volume keeps rising — buyers absorbing supply at current levels` });
+  }
+  if (compressed) {
+    score += 1;
+    reasons.push({ weight: 1, text: `Volatility squeezed to ${(volatility * 100).toFixed(0)}% — coiled spring, big move usually follows` });
+  }
+  if (p30 < 0 && p7 > -2 && p7 < 4) {
+    score += 2;
+    reasons.push({ weight: 2, text: `Stopped falling after 30d decline (${p30.toFixed(1)}%) and is now stabilising — bottom may be in` });
+  }
+  if (p7 > 25) {
+    score -= 3;
+    reasons.push({ weight: -3, text: `Already pumped +${p7.toFixed(1)}% in 7 days — too late, smart money is selling` });
+  }
+  if (p7 < -10 && volRatio > 0.06) {
+    score -= 2;
+    reasons.push({ weight: -2, text: `Dropping fast (${p7.toFixed(1)}%) on high volume — actively being dumped` });
+  }
 
+  reasons.sort((a, b) => Math.abs(b.weight) - Math.abs(a.weight));
   return {
     score: Math.max(-5, Math.min(10, score)),
-    explanation: reasons.length ? reasons.slice(0, 2).join("; ") + "." : "No strong signals.",
+    explanation: reasons.length ? reasons.slice(0, 2).map((r) => r.text).join(". ") + "." : "Boring price action — nothing to see here.",
   };
 }
 

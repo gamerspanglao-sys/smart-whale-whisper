@@ -406,7 +406,7 @@ const Index = () => {
                     <TableHead className="text-right text-xs">Days</TableHead>
                     <TableHead className="text-xs">Trend</TableHead>
                     <TableHead className="text-xs">Signal</TableHead>
-                    <TableHead className="text-xs hidden lg:table-cell">Why</TableHead>
+                    <TableHead className="text-xs hidden lg:table-cell min-w-[280px]">Why buy now</TableHead>
                     <TableHead className="w-10 text-xs"></TableHead>
                   </TableRow>
                 </TableHeader>
@@ -439,7 +439,14 @@ const Index = () => {
                         <TableCell className="text-right tabular text-sm">{r.days_in_accumulation}</TableCell>
                         <TableCell><Sparkline data={r.sparkline ?? []} /></TableCell>
                         <TableCell><SignalBadge signal={r.signal} /></TableCell>
-                        <TableCell className="text-xs text-muted-foreground hidden lg:table-cell max-w-[240px]">{r.explanation}</TableCell>
+                        <TableCell className="text-xs hidden lg:table-cell max-w-[360px]">
+                          <span
+                            className={r.signal === "Strong" ? "text-foreground" : r.signal === "Avoid" ? "text-destructive/80" : "text-muted-foreground"}
+                            title={r.explanation ?? ""}
+                          >
+                            {r.explanation}
+                          </span>
+                        </TableCell>
                         <TableCell>
                           {watchedIds.has(r.coin_id) ? (
                             <button
@@ -497,16 +504,17 @@ const Index = () => {
                     <TableHead className="text-xs">Trend</TableHead>
                     <TableHead className="text-xs hidden md:table-cell">Score 7d</TableHead>
                     <TableHead className="text-xs">Signal</TableHead>
+                    <TableHead className="text-xs hidden xl:table-cell min-w-[260px]">Why buy now</TableHead>
                     <TableHead className="text-xs">Added / Checked</TableHead>
                     <TableHead className="w-10 text-xs"></TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {watchlistLoading ? (
-                    <TableRow><TableCell colSpan={11} className="text-center py-12 text-muted-foreground">Loading…</TableCell></TableRow>
+                    <TableRow><TableCell colSpan={12} className="text-center py-12 text-muted-foreground">Loading…</TableCell></TableRow>
                   ) : watchlist.filter((w) => w.active).length === 0 ? (
                     <TableRow>
-                      <TableCell colSpan={11} className="text-center py-12 text-muted-foreground">
+                      <TableCell colSpan={12} className="text-center py-12 text-muted-foreground">
                         Watchlist is empty. Add coins from the Scanner tab.
                       </TableCell>
                     </TableRow>
@@ -550,6 +558,14 @@ const Index = () => {
                             })()}
                           </TableCell>
                           <TableCell>{snap ? <SignalBadge signal={snap.signal} /> : "—"}</TableCell>
+                          <TableCell className="text-xs hidden xl:table-cell max-w-[340px]">
+                            <span
+                              className={snap?.signal === "Strong" ? "text-foreground" : snap?.signal === "Avoid" ? "text-destructive/80" : "text-muted-foreground"}
+                              title={snap?.explanation ?? ""}
+                            >
+                              {snap?.explanation ?? "—"}
+                            </span>
+                          </TableCell>
                           <TableCell className="text-xs text-muted-foreground whitespace-nowrap">
                             <div>{fmt.time(w.added_at)}</div>
                             {w.last_monitored_at && (

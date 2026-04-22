@@ -59,52 +59,52 @@ interface ScoreInput {
 
 function computeScore(d: ScoreInput): { score: number; explanation: string } {
   let score = 0;
-  const reasons: string[] = [];
+  const reasons: { weight: number; text: string }[] = [];
   const p7 = d.price_change_7d ?? 0;
   const p30 = d.price_change_30d ?? 0;
-  const volRatio = d.vol_24h / Math.max(d.market_cap, 1); // turnover
+  const volRatio = d.vol_24h / Math.max(d.market_cap, 1);
   const flat = Math.abs(p7) < 5;
-  const compressed = d.volatility > 0 && d.volatility < 0.6; // < 60% annualized vol = quiet
+  const compressed = d.volatility > 0 && d.volatility < 0.6;
+  const volPct = (volRatio * 100).toFixed(1);
 
-  // Proxy: high turnover while price flat => stealth accumulation (+2 net outflow proxy)
+  // Stealth accumulation — heavy trading while price stays flat = whales loading up quietly
   if (volRatio > 0.05 && flat) {
     score += 2;
-    reasons.push("high turnover with flat price");
+    reasons.push({ weight: 2, text: `Heavy trading (${volPct}% of mcap/day) with flat price — classic stealth accumulation by large players` });
   }
-  // Proxy: rising volume relative to mcap (+2 whale-balance proxy via accumulation)
   if (volRatio > 0.08) {
     score += 2;
-    reasons.push("elevated volume vs market cap");
+    reasons.push({ weight: 2, text: `Volume is ${volPct}% of market cap — unusually high turnover signals strong interest` });
   }
-  // Volume rising while price flat (+2)
   if (flat && volRatio > 0.04) {
     score += 2;
-    reasons.push("volume rising while price flat");
+    reasons.push({ weight: 2, text: `Price barely moves but volume keeps rising — buyers absorbing supply at current levels` });
   }
-  // Volatility compression (+1)
   if (compressed) {
     score += 1;
-    reasons.push("low volatility compression");
+    reasons.push({ weight: 1, text: `Volatility squeezed to ${(d.volatility * 100).toFixed(0)}% — coiled spring, big move usually follows` });
   }
-  // Price reclaim from 30d lows but still flat 7d (+2 reserves-decreasing proxy)
   if (p30 < 0 && p7 > -2 && p7 < 4) {
     score += 2;
-    reasons.push("base building after 30d drawdown");
-  }
-  // Penalty: large pump (proxy for inflow / late) (-3)
-  if (p7 > 25) {
-    score -= 3;
-    reasons.push("large 7d pump");
-  }
-  // Penalty: price drops with high volume (-2)
-  if (p7 < -10 && volRatio > 0.06) {
-    score -= 2;
-    reasons.push("high-volume breakdown");
+    reasons.push({ weight: 2, text: `Stopped falling after 30d decline (${p30.toFixed(1)}%) and is now stabilising — bottom may be in` });
   }
 
+  // Penalties
+  if (p7 > 25) {
+    score -= 3;
+    reasons.push({ weight: -3, text: `Already pumped +${p7.toFixed(1)}% in 7 days — too late, smart money is selling` });
+  }
+  if (p7 < -10 && volRatio > 0.06) {
+    score -= 2;
+    reasons.push({ weight: -2, text: `Dropping fast (${p7.toFixed(1)}%) on high volume — actively being dumped` });
+  }
+
+  // Pick the most informative reason (highest absolute weight)
+  reasons.sort((a, b) => Math.abs(b.weight) - Math.abs(a.weight));
   const exp = reasons.length
-    ? reasons.slice(0, 2).join("; ") + "."
-    : "No strong accumulation signals.";
+    ? reasons.slice(0, 2).map((r) => r.text).join(". ") + "."
+    : "Boring price action and average volume — nothing to see here.";
+
   return { score: Math.max(-5, Math.min(10, score)), explanation: exp };
 }
 

@@ -104,6 +104,14 @@ const fmt = {
   },
 };
 
+/** Strong > Watchlist > Neutral > Avoid — best setups at the top when “All signals”. */
+const SIGNAL_STRENGTH_RANK: Record<string, number> = {
+  Strong: 4,
+  Watchlist: 3,
+  Neutral: 2,
+  Avoid: 1,
+};
+
 interface Criterion {
   label: string;
   triggered: boolean;
@@ -224,8 +232,8 @@ const Index = () => {
       .from("asset_snapshots")
       .select("*")
       .eq("snapshot_date", date)
-      .order("momentum", { ascending: false })
-      .order("score", { ascending: false });
+      .order("score", { ascending: false })
+      .order("momentum", { ascending: false });
 
     setRows((data as unknown as Snapshot[]) ?? []);
     setLoading(false);
@@ -350,7 +358,7 @@ const Index = () => {
   };
 
   const filtered = useMemo(() => {
-    return rows.filter((r) => {
+    const list = rows.filter((r) => {
       if (search && !`${r.name} ${r.symbol}`.toLowerCase().includes(search.toLowerCase())) return false;
       if (signalFilter !== "all" && r.signal !== signalFilter) return false;
       if (r.score < Number(minScore)) return false;
@@ -358,6 +366,27 @@ const Index = () => {
       if (minMomentum === "strong" && r.momentum < 3) return false;
       return true;
     });
+
+    const avoidMode = signalFilter === "Avoid";
+    list.sort((a, b) => {
+      if (avoidMode) {
+        // Worst / most “destructive” first: weakest momentum, then worst 7d dump
+        if (a.momentum !== b.momentum) return a.momentum - b.momentum;
+        const p7a = a.price_change_7d ?? 0;
+        const p7b = b.price_change_7d ?? 0;
+        if (p7a !== p7b) return p7a - p7b;
+        return a.score - b.score;
+      }
+      if (signalFilter === "all") {
+        const ta = SIGNAL_STRENGTH_RANK[a.signal] ?? 0;
+        const tb = SIGNAL_STRENGTH_RANK[b.signal] ?? 0;
+        if (ta !== tb) return tb - ta;
+      }
+      if (b.score !== a.score) return b.score - a.score;
+      if (b.momentum !== a.momentum) return b.momentum - a.momentum;
+      return a.symbol.localeCompare(b.symbol);
+    });
+    return list;
   }, [rows, search, signalFilter, minScore, minMomentum]);
 
   const topRows = filtered.slice(0, showLimit);
@@ -476,6 +505,13 @@ const Index = () => {
                 )}
               </span>
             </div>
+            <p className="text-[11px] text-muted-foreground">
+              {signalFilter === "Avoid"
+                ? "Order: most negative momentum first, then worst 7d return (severe Avoid on top)."
+                : signalFilter === "all"
+                  ? "Order: Strong → Watchlist → Avoid, then highest score, then momentum."
+                  : "Order: highest score first, then momentum."}
+            </p>
 
             <div className="rounded-lg border border-border bg-card overflow-hidden shadow-[var(--shadow-card)]">
               <Table>

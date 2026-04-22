@@ -1,13 +1,7 @@
-project_id = "saljzkmxmzvymzeipefk"
+project_id = "hcrffntjzzlpjhzsppna"
 
 [functions.run-scan]
 verify_jwt = false
 
-[functions.run-scan.schedule]
-cron = "0 2 * * *"
-
 [functions.monitor-watchlist]
 verify_jwt = false
-
-[functions.monitor-watchlist.schedule]
-cron = "0 */2 * * *"

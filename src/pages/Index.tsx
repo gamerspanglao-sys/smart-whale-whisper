@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/db";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -35,6 +35,10 @@ import {
   Repeat2,
   Zap,
   Clock,
+  ChevronDown,
+  ChevronRight,
+  Check,
+  X,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -100,6 +104,69 @@ const fmt = {
   },
 };
 
+interface Criterion {
+  label: string;
+  triggered: boolean;
+  weight: number;
+  detail: string;
+}
+
+// Mirrors the scoring rules in supabase/functions/run-scan/index.ts
+function evaluateCriteria(s: Snapshot): Criterion[] {
+  const p7 = s.price_change_7d ?? 0;
+  const p30 = s.price_change_30d ?? 0;
+  const vol = s.volatility ?? 0;
+  const volRatio = s.volume_24h / Math.max(s.market_cap, 1);
+  const flat = Math.abs(p7) < 5;
+  const compressed = vol > 0 && vol < 0.6;
+  const volPctStr = (volRatio * 100).toFixed(2) + "% of mcap/day";
+
+  return [
+    {
+      label: "Stealth accumulation",
+      triggered: volRatio > 0.05 && flat,
+      weight: 2,
+      detail: `Heavy trading with flat price. Need: turnover > 5% AND |7d change| < 5%. Got: turnover ${volPctStr}, 7d change ${p7.toFixed(2)}%`,
+    },
+    {
+      label: "Elevated turnover",
+      triggered: volRatio > 0.08,
+      weight: 2,
+      detail: `Volume vs market cap shows strong interest. Need: turnover > 8%. Got: ${volPctStr}`,
+    },
+    {
+      label: "Buyers absorbing supply",
+      triggered: flat && volRatio > 0.04,
+      weight: 2,
+      detail: `Volume rising while price stays flat. Need: turnover > 4% AND |7d change| < 5%. Got: turnover ${volPctStr}, 7d change ${p7.toFixed(2)}%`,
+    },
+    {
+      label: "Volatility compression",
+      triggered: compressed,
+      weight: 1,
+      detail: `Low annualized volatility = coiled spring. Need: vol > 0 AND < 60%. Got: ${(vol * 100).toFixed(0)}%`,
+    },
+    {
+      label: "Bottom forming",
+      triggered: p30 < 0 && p7 > -2 && p7 < 4,
+      weight: 2,
+      detail: `Stopped falling after 30d decline. Need: 30d < 0 AND -2 < 7d < 4. Got: 30d ${p30.toFixed(2)}%, 7d ${p7.toFixed(2)}%`,
+    },
+    {
+      label: "Late pump (penalty)",
+      triggered: p7 > 25,
+      weight: -3,
+      detail: `Already pumped — too late to enter. Triggers at 7d > 25%. Got: ${p7.toFixed(2)}%`,
+    },
+    {
+      label: "High-volume dump (penalty)",
+      triggered: p7 < -10 && volRatio > 0.06,
+      weight: -2,
+      detail: `Actively being sold off. Triggers at 7d < -10% AND turnover > 6%. Got: 7d ${p7.toFixed(2)}%, turnover ${volPctStr}`,
+    },
+  ];
+}
+
 const Index = () => {
   const [rows, setRows] = useState<Snapshot[]>([]);
   const [loading, setLoading] = useState(true);
@@ -119,6 +186,15 @@ const Index = () => {
 
   const [alerts, setAlerts] = useState<PriceAlert[]>([]);
   const [alertsLoading, setAlertsLoading] = useState(false);
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+
+  const toggleExpanded = (coinId: string) => {
+    setExpanded((prev) => {
+      const n = new Set(prev);
+      if (n.has(coinId)) n.delete(coinId); else n.add(coinId);
+      return n;
+    });
+  };
 
   const watchedIds = useMemo(() => new Set(watchlist.filter((w) => w.active).map((w) => w.coin_id)), [watchlist]);
 
@@ -405,6 +481,7 @@ const Index = () => {
               <Table>
                 <TableHeader>
                   <TableRow className="hover:bg-transparent border-border">
+                    <TableHead className="w-8 text-xs"></TableHead>
                     <TableHead className="w-10 text-xs">#</TableHead>
                     <TableHead className="text-xs">Asset</TableHead>
                     <TableHead className="text-right text-xs">Price</TableHead>
@@ -421,62 +498,81 @@ const Index = () => {
                 </TableHeader>
                 <TableBody>
                   {loading ? (
-                    <TableRow><TableCell colSpan={12} className="text-center py-12 text-muted-foreground">Loading…</TableCell></TableRow>
+                    <TableRow><TableCell colSpan={13} className="text-center py-12 text-muted-foreground">Loading…</TableCell></TableRow>
                   ) : topRows.length === 0 ? (
                     <TableRow>
-                      <TableCell colSpan={12} className="text-center py-12 text-muted-foreground">
+                      <TableCell colSpan={13} className="text-center py-12 text-muted-foreground">
                         {rows.length === 0 ? "No data yet. Click 'Run Scan'." : "No assets match filters."}
                       </TableCell>
                     </TableRow>
                   ) : (
-                    topRows.map((r, idx) => (
-                      <TableRow key={r.coin_id} className={`border-border ${r.signal === "Strong" ? "bg-primary/[0.04]" : ""}`}>
-                        <TableCell className="text-muted-foreground tabular text-xs">{idx + 1}</TableCell>
-                        <TableCell>
-                          <div className="font-medium">{r.symbol}</div>
-                          <div className="text-xs text-muted-foreground truncate max-w-[140px]">{r.name}</div>
-                        </TableCell>
-                        <TableCell className="text-right tabular text-sm">{fmt.price(r.price)}</TableCell>
-                        <TableCell className="text-right tabular text-sm text-muted-foreground">{fmt.usd(r.market_cap)}</TableCell>
-                        <TableCell className={`text-right tabular text-sm ${(r.price_change_7d ?? 0) >= 0 ? "text-success" : "text-destructive"}`}>
-                          {fmt.pct(r.price_change_7d)}
-                        </TableCell>
-                        <TableCell className="text-right tabular font-semibold">{r.score}</TableCell>
-                        <TableCell className={`text-right tabular font-semibold ${r.momentum > 0 ? "text-success" : r.momentum < 0 ? "text-destructive" : "text-muted-foreground"}`}>
-                          {r.momentum > 0 ? "+" : ""}{r.momentum}
-                        </TableCell>
-                        <TableCell className="text-right tabular text-sm">{r.days_in_accumulation}</TableCell>
-                        <TableCell><Sparkline data={r.sparkline ?? []} /></TableCell>
-                        <TableCell><SignalBadge signal={r.signal} /></TableCell>
-                        <TableCell className="text-xs hidden lg:table-cell max-w-[360px]">
-                          <span
-                            className={r.signal === "Strong" ? "text-foreground" : r.signal === "Avoid" ? "text-destructive/80" : "text-muted-foreground"}
-                            title={r.explanation ?? ""}
+                    topRows.map((r, idx) => {
+                      const isOpen = expanded.has(r.coin_id);
+                      const criteria = isOpen ? evaluateCriteria(r) : null;
+                      return (
+                        <Fragment key={r.coin_id}>
+                          <TableRow
+                            className={`border-border cursor-pointer ${r.signal === "Strong" ? "bg-primary/[0.04]" : ""}`}
+                            onClick={() => toggleExpanded(r.coin_id)}
                           >
-                            {r.explanation}
-                          </span>
-                        </TableCell>
-                        <TableCell>
-                          {watchedIds.has(r.coin_id) ? (
-                            <button
-                              onClick={() => removeFromWatchlist(r.coin_id, r.symbol)}
-                              title="Remove from Watchlist"
-                              className="text-primary hover:text-destructive transition-colors"
-                            >
-                              <BookmarkMinus className="size-4" />
-                            </button>
-                          ) : (
-                            <button
-                              onClick={() => addToWatchlist(r)}
-                              title="Add to Watchlist"
-                              className="text-muted-foreground hover:text-primary transition-colors"
-                            >
-                              <BookmarkPlus className="size-4" />
-                            </button>
+                            <TableCell className="text-muted-foreground">
+                              {isOpen ? <ChevronDown className="size-4" /> : <ChevronRight className="size-4" />}
+                            </TableCell>
+                            <TableCell className="text-muted-foreground tabular text-xs">{idx + 1}</TableCell>
+                            <TableCell>
+                              <div className="font-medium">{r.symbol}</div>
+                              <div className="text-xs text-muted-foreground truncate max-w-[140px]">{r.name}</div>
+                            </TableCell>
+                            <TableCell className="text-right tabular text-sm">{fmt.price(r.price)}</TableCell>
+                            <TableCell className="text-right tabular text-sm text-muted-foreground">{fmt.usd(r.market_cap)}</TableCell>
+                            <TableCell className={`text-right tabular text-sm ${(r.price_change_7d ?? 0) >= 0 ? "text-success" : "text-destructive"}`}>
+                              {fmt.pct(r.price_change_7d)}
+                            </TableCell>
+                            <TableCell className="text-right tabular font-semibold">{r.score}</TableCell>
+                            <TableCell className={`text-right tabular font-semibold ${r.momentum > 0 ? "text-success" : r.momentum < 0 ? "text-destructive" : "text-muted-foreground"}`}>
+                              {r.momentum > 0 ? "+" : ""}{r.momentum}
+                            </TableCell>
+                            <TableCell className="text-right tabular text-sm">{r.days_in_accumulation}</TableCell>
+                            <TableCell><Sparkline data={r.sparkline ?? []} /></TableCell>
+                            <TableCell><SignalBadge signal={r.signal} /></TableCell>
+                            <TableCell className="text-xs hidden lg:table-cell max-w-[360px]">
+                              <span
+                                className={r.signal === "Strong" ? "text-foreground" : r.signal === "Avoid" ? "text-destructive/80" : "text-muted-foreground"}
+                                title={r.explanation ?? ""}
+                              >
+                                {r.explanation}
+                              </span>
+                            </TableCell>
+                            <TableCell onClick={(e) => e.stopPropagation()}>
+                              {watchedIds.has(r.coin_id) ? (
+                                <button
+                                  onClick={() => removeFromWatchlist(r.coin_id, r.symbol)}
+                                  title="Remove from Watchlist"
+                                  className="text-primary hover:text-destructive transition-colors"
+                                >
+                                  <BookmarkMinus className="size-4" />
+                                </button>
+                              ) : (
+                                <button
+                                  onClick={() => addToWatchlist(r)}
+                                  title="Add to Watchlist"
+                                  className="text-muted-foreground hover:text-primary transition-colors"
+                                >
+                                  <BookmarkPlus className="size-4" />
+                                </button>
+                              )}
+                            </TableCell>
+                          </TableRow>
+                          {isOpen && criteria && (
+                            <TableRow className="bg-muted/30 border-border">
+                              <TableCell colSpan={13} className="p-0">
+                                <CriteriaBreakdown snap={r} criteria={criteria} />
+                              </TableCell>
+                            </TableRow>
                           )}
-                        </TableCell>
-                      </TableRow>
-                    ))
+                        </Fragment>
+                      );
+                    })
                   )}
                 </TableBody>
               </Table>
@@ -713,6 +809,75 @@ const StatCard = ({
   <div className={`rounded-lg border p-4 bg-card shadow-[var(--shadow-card)] ${accent ? "border-primary/30" : "border-border"}`}>
     <div className="flex items-center gap-2 text-xs text-muted-foreground mb-1">{icon}{label}</div>
     <div className="text-2xl font-semibold tabular">{value}</div>
+  </div>
+);
+
+const CriteriaBreakdown = ({ snap, criteria }: { snap: Snapshot; criteria: Criterion[] }) => {
+  const volRatio = snap.volume_24h / Math.max(snap.market_cap, 1);
+  const positiveSum = criteria.filter((c) => c.triggered && c.weight > 0).reduce((s, c) => s + c.weight, 0);
+  const negativeSum = criteria.filter((c) => c.triggered && c.weight < 0).reduce((s, c) => s + c.weight, 0);
+
+  return (
+    <div className="px-6 py-4 space-y-4">
+      {/* Raw metrics */}
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-3 text-xs">
+        <Metric label="Price" value={fmt.price(snap.price)} />
+        <Metric label="Market cap" value={fmt.usd(snap.market_cap)} />
+        <Metric label="24h volume" value={fmt.usd(snap.volume_24h)} />
+        <Metric label="Turnover" value={`${(volRatio * 100).toFixed(2)}%`} hint="vol / mcap per day" />
+        <Metric label="Volatility" value={snap.volatility != null ? `${(snap.volatility * 100).toFixed(0)}%` : "—"} hint="annualized" />
+        <Metric label="7d change" value={fmt.pct(snap.price_change_7d)} colored={snap.price_change_7d ?? 0} />
+        <Metric label="30d change" value={fmt.pct(snap.price_change_30d)} colored={snap.price_change_30d ?? 0} />
+        <Metric label="Days in accumulation" value={snap.days_in_accumulation.toString()} />
+        <Metric label="Momentum" value={`${snap.momentum > 0 ? "+" : ""}${snap.momentum}`} colored={snap.momentum} />
+        <Metric label="Phase" value={snap.phase} />
+      </div>
+
+      {/* Score breakdown */}
+      <div>
+        <div className="flex items-center justify-between mb-2">
+          <h4 className="text-sm font-semibold">Scoring breakdown</h4>
+          <span className="text-xs text-muted-foreground">
+            <span className="text-success">+{positiveSum}</span>
+            {negativeSum < 0 && <span className="text-destructive ml-1">{negativeSum}</span>}
+            <span className="ml-1">= final score <strong className="text-foreground">{snap.score}</strong></span>
+          </span>
+        </div>
+        <div className="space-y-1.5">
+          {criteria.map((c) => (
+            <div
+              key={c.label}
+              className={`flex items-start gap-3 text-xs p-2 rounded ${
+                c.triggered
+                  ? c.weight > 0 ? "bg-success/10 border border-success/30" : "bg-destructive/10 border border-destructive/30"
+                  : "bg-card border border-border/50 opacity-60"
+              }`}
+            >
+              <div className={`mt-0.5 shrink-0 ${c.triggered ? (c.weight > 0 ? "text-success" : "text-destructive") : "text-muted-foreground"}`}>
+                {c.triggered ? <Check className="size-4" /> : <X className="size-4" />}
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2">
+                  <span className="font-medium">{c.label}</span>
+                  <span className={`tabular text-[10px] px-1.5 py-0.5 rounded ${c.weight > 0 ? "bg-success/20 text-success" : "bg-destructive/20 text-destructive"}`}>
+                    {c.weight > 0 ? "+" : ""}{c.weight}
+                  </span>
+                  {!c.triggered && <span className="text-[10px] text-muted-foreground">(not triggered)</span>}
+                </div>
+                <div className="text-muted-foreground mt-0.5">{c.detail}</div>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+const Metric = ({ label, value, hint, colored }: { label: string; value: string; hint?: string; colored?: number }) => (
+  <div>
+    <div className="text-[10px] uppercase tracking-wide text-muted-foreground">{label}{hint && <span className="ml-1 normal-case opacity-60">({hint})</span>}</div>
+    <div className={`tabular font-semibold ${colored != null ? (colored > 0 ? "text-success" : colored < 0 ? "text-destructive" : "") : ""}`}>{value}</div>
   </div>
 );
 

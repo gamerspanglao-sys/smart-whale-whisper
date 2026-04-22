@@ -14,7 +14,105 @@ export type Database = {
   }
   public: {
     Tables: {
-      [_ in never]: never
+      asset_snapshots: {
+        Row: {
+          coin_id: string
+          created_at: string
+          days_in_accumulation: number
+          explanation: string | null
+          id: number
+          market_cap: number
+          momentum: number
+          name: string
+          phase: string
+          price: number
+          price_change_30d: number | null
+          price_change_7d: number | null
+          score: number
+          signal: string
+          snapshot_date: string
+          sparkline: Json | null
+          symbol: string
+          volatility: number | null
+          volume_24h: number
+          volume_change_7d: number | null
+        }
+        Insert: {
+          coin_id: string
+          created_at?: string
+          days_in_accumulation?: number
+          explanation?: string | null
+          id?: number
+          market_cap: number
+          momentum?: number
+          name: string
+          phase: string
+          price: number
+          price_change_30d?: number | null
+          price_change_7d?: number | null
+          score: number
+          signal: string
+          snapshot_date: string
+          sparkline?: Json | null
+          symbol: string
+          volatility?: number | null
+          volume_24h: number
+          volume_change_7d?: number | null
+        }
+        Update: {
+          coin_id?: string
+          created_at?: string
+          days_in_accumulation?: number
+          explanation?: string | null
+          id?: number
+          market_cap?: number
+          momentum?: number
+          name?: string
+          phase?: string
+          price?: number
+          price_change_30d?: number | null
+          price_change_7d?: number | null
+          score?: number
+          signal?: string
+          snapshot_date?: string
+          sparkline?: Json | null
+          symbol?: string
+          volatility?: number | null
+          volume_24h?: number
+          volume_change_7d?: number | null
+        }
+        Relationships: []
+      }
+      scan_runs: {
+        Row: {
+          assets_qualified: number
+          assets_scanned: number
+          created_at: string
+          duration_ms: number | null
+          id: number
+          run_date: string
+          triggered_by: string
+        }
+        Insert: {
+          assets_qualified: number
+          assets_scanned: number
+          created_at?: string
+          duration_ms?: number | null
+          id?: number
+          run_date: string
+          triggered_by?: string
+        }
+        Update: {
+          assets_qualified?: number
+          assets_scanned?: number
+          created_at?: string
+          duration_ms?: number | null
+          id?: number
+          run_date?: string
+          triggered_by?: string
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never

@@ -35,6 +35,7 @@ export type Database = {
           added_by?: string
           notes?: string | null
           active?: boolean
+          last_monitored_at?: string | null
         }
         Update: {
           id?: number
@@ -45,6 +46,7 @@ export type Database = {
           added_by?: string
           notes?: string | null
           active?: boolean
+          last_monitored_at?: string | null
         }
         Relationships: []
       }
@@ -93,6 +95,8 @@ export type Database = {
           coin_id: string
           created_at: string
           days_in_accumulation: number
+          entry_high: number | null
+          entry_low: number | null
           explanation: string | null
           id: number
           market_cap: number
@@ -107,7 +111,9 @@ export type Database = {
           signal: string
           snapshot_date: string
           sparkline: Json | null
+          stop_loss: number | null
           symbol: string
+          target: number | null
           volatility: number | null
           volume_24h: number
           volume_change_7d: number | null
@@ -117,6 +123,8 @@ export type Database = {
           coin_id: string
           created_at?: string
           days_in_accumulation?: number
+          entry_high?: number | null
+          entry_low?: number | null
           explanation?: string | null
           id?: number
           market_cap: number
@@ -131,7 +139,9 @@ export type Database = {
           signal: string
           snapshot_date: string
           sparkline?: Json | null
+          stop_loss?: number | null
           symbol: string
+          target?: number | null
           volatility?: number | null
           volume_24h: number
           volume_change_7d?: number | null
@@ -141,6 +151,8 @@ export type Database = {
           coin_id?: string
           created_at?: string
           days_in_accumulation?: number
+          entry_high?: number | null
+          entry_low?: number | null
           explanation?: string | null
           id?: number
           market_cap?: number
@@ -155,7 +167,9 @@ export type Database = {
           signal?: string
           snapshot_date?: string
           sparkline?: Json | null
+          stop_loss?: number | null
           symbol?: string
+          target?: number | null
           volatility?: number | null
           volume_24h?: number
           volume_change_7d?: number | null

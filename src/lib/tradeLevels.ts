@@ -1,4 +1,6 @@
-/** Mirrors supabase/functions/*/index.ts — buy vs exit levels when score ties. */
+/** Mirrors supabase/functions/_shared/scoring.ts — used as UI fallback when a
+ *  snapshot pre-dates the new columns.
+ */
 
 export type TradeLevels = {
   buy_tier: string | null;
@@ -63,19 +65,9 @@ export function assignTradeLevels(
   }
 
   if (score >= 4) {
-    return {
-      buy_tier: "Speculative — weak edge",
-      sell_tier: null,
-      buy_rank: 1,
-      sell_rank: 0,
-    };
+    return { buy_tier: "Speculative — weak edge", sell_tier: null, buy_rank: 1, sell_rank: 0 };
   }
-  return {
-    buy_tier: "No setup — wait",
-    sell_tier: null,
-    buy_rank: 0,
-    sell_rank: 0,
-  };
+  return { buy_tier: "No setup — wait", sell_tier: null, buy_rank: 0, sell_rank: 0 };
 }
 
 export type TierSortSnapshot = {
@@ -88,7 +80,6 @@ export type TierSortSnapshot = {
   volatility: number | null;
 };
 
-/** When scores tie: higher conviction / cleaner setup first. */
 export function compareLongConviction(a: TierSortSnapshot, b: TierSortSnapshot): number {
   const la = assignTradeLevels(a.signal, a.score, a.momentum, a.price_change_7d ?? 0, a.days_in_accumulation);
   const lb = assignTradeLevels(b.signal, b.score, b.momentum, b.price_change_7d ?? 0, b.days_in_accumulation);
@@ -104,7 +95,6 @@ export function compareLongConviction(a: TierSortSnapshot, b: TierSortSnapshot):
   return a.symbol.localeCompare(b.symbol);
 }
 
-/** Avoid tab: most severe distribution first. */
 export function compareAvoidSeverity(a: TierSortSnapshot, b: TierSortSnapshot): number {
   const la = assignTradeLevels(a.signal, a.score, a.momentum, a.price_change_7d ?? 0, a.days_in_accumulation);
   const lb = assignTradeLevels(b.signal, b.score, b.momentum, b.price_change_7d ?? 0, b.days_in_accumulation);
@@ -130,4 +120,52 @@ export function displayTiers(s: {
     buy: s.buy_tier ?? c.buy_tier,
     sell: s.sell_tier ?? c.sell_tier,
   };
+}
+
+/** Fallback risk calculation when the snapshot pre-dates the risk columns. */
+export function computeRiskZone(
+  price: number,
+  volatility: number,
+  sparkline: number[] | null | undefined,
+): { entry_low: number; entry_high: number; stop_loss: number; target: number; risk_pct: number; reward_pct: number } {
+  const dailyVol = Math.min(0.2, Math.max(0.01, volatility / Math.sqrt(365)));
+  let swingLow = price;
+  if (sparkline && sparkline.length >= 5) {
+    const tail = sparkline.slice(-Math.floor(sparkline.length / 2));
+    swingLow = Math.min(...tail);
+  }
+  const stopByVol = price * (1 - Math.max(0.05, dailyVol * 2.5));
+  const stopBySwing = swingLow * 0.98;
+  const stop_loss = Math.max(stopByVol, stopBySwing);
+  const risk_pct = Math.max(0.03, (price - stop_loss) / price);
+  const reward_pct = Math.max(0.15, risk_pct * 3);
+  const target = price * (1 + reward_pct);
+  const entry_low = price * (1 - dailyVol * 0.5);
+  const entry_high = price * (1 + dailyVol * 0.3);
+  return { entry_low, entry_high, stop_loss, target, risk_pct, reward_pct };
+}
+
+export function resolveRisk(s: {
+  price: number;
+  volatility: number | null;
+  sparkline: number[] | null | undefined;
+  entry_low?: number | null;
+  entry_high?: number | null;
+  stop_loss?: number | null;
+  target?: number | null;
+}) {
+  if (s.entry_low != null && s.stop_loss != null && s.target != null) {
+    const entry_high = s.entry_high ?? s.price;
+    const risk_pct = Math.max(0.001, (s.price - s.stop_loss) / s.price);
+    const reward_pct = Math.max(0.001, (s.target - s.price) / s.price);
+    return {
+      entry_low: s.entry_low,
+      entry_high,
+      stop_loss: s.stop_loss,
+      target: s.target,
+      risk_pct,
+      reward_pct,
+    };
+  }
+  return computeRiskZone(s.price, s.volatility ?? 0, s.sparkline);
 }

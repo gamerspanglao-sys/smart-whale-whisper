@@ -21,7 +21,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Sparkline } from "@/components/Sparkline";
 import { SignalBadge } from "@/components/SignalBadge";
 import { LevelBadge } from "@/components/LevelBadge";
-import { compareAvoidSeverity, compareLongConviction, displayTiers } from "@/lib/tradeLevels";
+import { compareAvoidSeverity, compareLongConviction, displayTiers, resolveRisk } from "@/lib/tradeLevels";
 import {
   Activity,
   RefreshCw,
@@ -62,6 +62,10 @@ interface Snapshot {
   phase: string;
   buy_tier?: string | null;
   sell_tier?: string | null;
+  entry_low?: number | null;
+  entry_high?: number | null;
+  stop_loss?: number | null;
+  target?: number | null;
   explanation: string | null;
   sparkline: number[] | null;
 }
@@ -123,58 +127,101 @@ interface Criterion {
   detail: string;
 }
 
-// Mirrors the scoring rules in supabase/functions/run-scan/index.ts
+// Mirrors supabase/functions/_shared/scoring.ts — UI breakdown
 function evaluateCriteria(s: Snapshot): Criterion[] {
   const p7 = s.price_change_7d ?? 0;
   const p30 = s.price_change_30d ?? 0;
   const vol = s.volatility ?? 0;
   const volRatio = s.volume_24h / Math.max(s.market_cap, 1);
-  const flat = Math.abs(p7) < 5;
-  const compressed = vol > 0 && vol < 0.6;
   const volPctStr = (volRatio * 100).toFixed(2) + "% of mcap/day";
+  const flat = Math.abs(p7) < 5;
+
+  // Simulate sparkline-derived late drift / drawdown from what the UI has
+  const spark = s.sparkline ?? [];
+  let lateDriftPct = 0;
+  let maxDdPct = 0;
+  if (spark.length >= 4) {
+    const lateStart = spark[Math.floor(spark.length * 0.75)] ?? spark[spark.length - 1];
+    const lateEnd = spark[spark.length - 1];
+    lateDriftPct = lateStart > 0 ? ((lateEnd - lateStart) / lateStart) * 100 : 0;
+    let peak = spark[0];
+    for (const p of spark) {
+      if (p > peak) peak = p;
+      const dd = peak > 0 ? (peak - p) / peak : 0;
+      if (dd > maxDdPct / 100) maxDdPct = dd * 100;
+    }
+  }
+
+  const stealthW = flat && volRatio > 0.03 && p30 > -25
+    ? Math.min(3, Math.max(1, Math.round(volRatio * 30)))
+    : 0;
 
   return [
     {
-      label: "Stealth accumulation",
-      triggered: volRatio > 0.05 && flat,
-      weight: 2,
-      detail: `Heavy trading with flat price. Need: turnover > 5% AND |7d change| < 5%. Got: turnover ${volPctStr}, 7d change ${p7.toFixed(2)}%`,
+      label: "Stealth accumulation (graduated)",
+      triggered: stealthW > 0,
+      weight: stealthW > 0 ? stealthW : 1,
+      detail: `Flat 7d + heavy turnover, excluding collapsing 30d. Need: |7d|<5, turnover>3%, 30d>-25%. Got: 7d ${p7.toFixed(2)}%, turnover ${volPctStr}, 30d ${p30.toFixed(2)}%. Weight = min(3, turnover × 30).`,
     },
     {
-      label: "Elevated turnover",
-      triggered: volRatio > 0.08,
-      weight: 2,
-      detail: `Volume vs market cap shows strong interest. Need: turnover > 8%. Got: ${volPctStr}`,
-    },
-    {
-      label: "Buyers absorbing supply",
-      triggered: flat && volRatio > 0.04,
-      weight: 2,
-      detail: `Volume rising while price stays flat. Need: turnover > 4% AND |7d change| < 5%. Got: turnover ${volPctStr}, 7d change ${p7.toFixed(2)}%`,
+      label: "Post-drawdown base",
+      triggered: p30 < -15 && p7 > -2 && p7 < 5 && vol < 0.95,
+      weight: 3,
+      detail: `Stabilising after ≥15% 30d drop. Need: 30d<-15, -2<7d<5, vol<95%. Got: 30d ${p30.toFixed(2)}%, 7d ${p7.toFixed(2)}%, vol ${(vol * 100).toFixed(0)}%.`,
     },
     {
       label: "Volatility compression",
-      triggered: compressed,
+      triggered: vol > 0 && vol < 0.6 && p7 > -8 && p7 < 8,
       weight: 1,
-      detail: `Low annualized volatility = coiled spring. Need: vol > 0 AND < 60%. Got: ${(vol * 100).toFixed(0)}%`,
+      detail: `Coiled spring. Need: 0<vol<60%, -8<7d<8. Got: vol ${(vol * 100).toFixed(0)}%, 7d ${p7.toFixed(2)}%.`,
     },
     {
-      label: "Bottom forming",
-      triggered: p30 < 0 && p7 > -2 && p7 < 4,
+      label: "Late-week upturn",
+      triggered: Math.abs(p7) < 6 && lateDriftPct > 1.5,
       weight: 2,
-      detail: `Stopped falling after 30d decline. Need: 30d < 0 AND -2 < 7d < 4. Got: 30d ${p30.toFixed(2)}%, 7d ${p7.toFixed(2)}%`,
+      detail: `Last 25% of 7d window turning up inside a flat overall print. Need: |7d|<6, last-quarter drift > 1.5%. Got: 7d ${p7.toFixed(2)}%, late drift ${lateDriftPct.toFixed(2)}%.`,
     },
     {
-      label: "Late pump (penalty)",
-      triggered: p7 > 25,
-      weight: -3,
-      detail: `Already pumped — too late to enter. Triggers at 7d > 25%. Got: ${p7.toFixed(2)}%`,
+      label: "Deep liquidity",
+      triggered: s.market_cap > 300_000_000 && s.volume_24h > 30_000_000,
+      weight: 1,
+      detail: `Large, traded names. Need: mcap>$300M AND 24h vol>$30M. Got: mcap $${(s.market_cap / 1e6).toFixed(0)}M, vol $${(s.volume_24h / 1e6).toFixed(0)}M.`,
     },
     {
-      label: "High-volume dump (penalty)",
-      triggered: p7 < -10 && volRatio > 0.06,
+      label: "Parabolic penalty",
+      triggered: p7 > 25 && vol > 0.7,
+      weight: -4,
+      detail: `Too late & too hot. Need: 7d>25% AND vol>70%. Got: 7d ${p7.toFixed(2)}%, vol ${(vol * 100).toFixed(0)}%.`,
+    },
+    {
+      label: "Rallied penalty",
+      triggered: p7 > 15 && !(p7 > 25 && vol > 0.7),
       weight: -2,
-      detail: `Actively being sold off. Triggers at 7d < -10% AND turnover > 6%. Got: 7d ${p7.toFixed(2)}%, turnover ${volPctStr}`,
+      detail: `Moved off lows. Triggers at 7d>15%, but only if not already parabolic. Got: ${p7.toFixed(2)}%.`,
+    },
+    {
+      label: "Waiting-for-pullback penalty",
+      triggered: p7 > 10 && p7 <= 15,
+      weight: -1,
+      detail: `Minor recent rally. Triggers at 10<7d≤15. Got: ${p7.toFixed(2)}%.`,
+    },
+    {
+      label: "Falling knife",
+      triggered: p7 < -15,
+      weight: -3,
+      detail: `No visible support yet. Triggers at 7d<-15. Got: ${p7.toFixed(2)}%.`,
+    },
+    {
+      label: "High-volume dump",
+      triggered: p7 < -10 && p7 >= -15 && volRatio > 0.06,
+      weight: -2,
+      detail: `Active distribution. Triggers at -15≤7d<-10 AND turnover>6%. Got: 7d ${p7.toFixed(2)}%, turnover ${volPctStr}.`,
+    },
+    {
+      label: "Choppy week",
+      triggered: maxDdPct > 18 && p7 < 0,
+      weight: -1,
+      detail: `Deep intra-week drawdown with red close. Need: max DD>18% AND 7d<0. Got: DD ${maxDdPct.toFixed(1)}%, 7d ${p7.toFixed(2)}%.`,
     },
   ];
 }
@@ -814,6 +861,11 @@ const Index = () => {
 };
 
 const AlertIcon = ({ type }: { type: string }) => {
+  if (type === "exit_now") return (
+    <span className="inline-flex items-center gap-1 text-xs text-destructive font-semibold">
+      <AlertTriangle className="size-3" /> Exit now
+    </span>
+  );
   if (type === "signal_change") return (
     <span className="inline-flex items-center gap-1 text-xs text-accent font-medium">
       <Bell className="size-3" /> Signal change
@@ -861,15 +913,41 @@ const CriteriaBreakdown = ({ snap, criteria }: { snap: Snapshot; criteria: Crite
   const negativeSum = criteria.filter((c) => c.triggered && c.weight < 0).reduce((s, c) => s + c.weight, 0);
 
   const tiers = displayTiers(snap);
+  const risk = resolveRisk({
+    price: snap.price,
+    volatility: snap.volatility,
+    sparkline: snap.sparkline,
+    entry_low: snap.entry_low,
+    entry_high: snap.entry_high,
+    stop_loss: snap.stop_loss,
+    target: snap.target,
+  });
+  const rr = risk.reward_pct / risk.risk_pct;
   return (
     <div className="px-6 py-4 space-y-4">
-      <div>
-        <h4 className="text-sm font-semibold mb-2">Buy / exit level</h4>
-        <LevelBadge buy={tiers.buy} sell={tiers.sell} />
-        <p className="text-[11px] text-muted-foreground mt-2 max-w-2xl">
-          Same score does not mean the same conviction: the level uses momentum, days in accumulation, and 7d price to rank quality.
-          This is opinionated heuristics, not financial advice.
-        </p>
+      <div className="grid md:grid-cols-2 gap-4">
+        <div>
+          <h4 className="text-sm font-semibold mb-2">Buy / exit level</h4>
+          <LevelBadge buy={tiers.buy} sell={tiers.sell} />
+          <p className="text-[11px] text-muted-foreground mt-2">
+            Same score ≠ same conviction: level uses momentum, days in accumulation and 7d price to rank quality.
+          </p>
+        </div>
+        <div>
+          <h4 className="text-sm font-semibold mb-2">Suggested risk zone</h4>
+          <div className="rounded-md border border-border bg-card p-3 text-xs space-y-2">
+            <div className="grid grid-cols-4 gap-2">
+              <RiskLabel title="Entry" value={`${fmt.price(risk.entry_low)} – ${fmt.price(risk.entry_high)}`} />
+              <RiskLabel title="Stop" value={fmt.price(risk.stop_loss)} accent="destructive" sub={`-${(risk.risk_pct * 100).toFixed(1)}%`} />
+              <RiskLabel title="Target" value={fmt.price(risk.target)} accent="success" sub={`+${(risk.reward_pct * 100).toFixed(1)}%`} />
+              <RiskLabel title="R : R" value={`1 : ${rr.toFixed(1)}`} accent={rr >= 2 ? "success" : rr >= 1.5 ? "neutral" : "destructive"} />
+            </div>
+            <p className="text-[10px] text-muted-foreground leading-snug">
+              Stop = max(volatility-based 2.5×ATR, recent swing low − 2%). Target = 3× risk, floored at 15%.
+              Sizing rule of thumb: size so a stop-out loses ≤ 1% of portfolio. Not financial advice.
+            </p>
+          </div>
+        </div>
       </div>
       {/* Raw metrics */}
       <div className="grid grid-cols-2 md:grid-cols-5 gap-3 text-xs">
@@ -932,5 +1010,19 @@ const Metric = ({ label, value, hint, colored }: { label: string; value: string;
     <div className={`tabular font-semibold ${colored != null ? (colored > 0 ? "text-success" : colored < 0 ? "text-destructive" : "") : ""}`}>{value}</div>
   </div>
 );
+
+const RiskLabel = ({ title, value, sub, accent }: { title: string; value: string; sub?: string; accent?: "success" | "destructive" | "neutral" }) => {
+  const color =
+    accent === "success" ? "text-success"
+    : accent === "destructive" ? "text-destructive"
+    : "";
+  return (
+    <div>
+      <div className="text-[10px] uppercase tracking-wide text-muted-foreground">{title}</div>
+      <div className={`tabular font-semibold ${color}`}>{value}</div>
+      {sub && <div className={`text-[10px] tabular ${color}`}>{sub}</div>}
+    </div>
+  );
+};
 
 export default Index;

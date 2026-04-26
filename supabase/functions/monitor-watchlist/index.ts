@@ -6,6 +6,8 @@ import {
   classify,
   computeRiskZone,
   computeScore,
+  formatBuyNowSummary,
+  qualifiesCompellingBuy,
 } from "../_shared/scoring.ts";
 
 const corsHeaders = {
@@ -60,15 +62,26 @@ Deno.serve(async (req) => {
 
     const { data: priorRows } = await supabase
       .from("asset_snapshots")
-      .select("coin_id, snapshot_date, score, signal, days_in_accumulation, price, sell_tier")
+      .select(
+        "coin_id, snapshot_date, score, signal, days_in_accumulation, price, sell_tier, momentum, market_cap, price_change_7d, buy_tier",
+      )
       .in("coin_id", watchlistRows.map((w) => w.coin_id))
       .gte("snapshot_date", new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10))
       .order("snapshot_date", { ascending: false });
 
-    const priorByCoin = new Map<
-      string,
-      { date: string; score: number; signal: string; days: number; price: number; sell_tier: string | null }[]
-    >();
+    type PriorRow = {
+      date: string;
+      score: number;
+      signal: string;
+      days: number;
+      price: number;
+      sell_tier: string | null;
+      momentum: number;
+      market_cap: number;
+      price_change_7d: number | null;
+      buy_tier: string | null;
+    };
+    const priorByCoin = new Map<string, PriorRow[]>();
     for (const r of priorRows ?? []) {
       const list = priorByCoin.get(r.coin_id) ?? [];
       list.push({
@@ -78,6 +91,10 @@ Deno.serve(async (req) => {
         days: r.days_in_accumulation,
         price: r.price,
         sell_tier: (r as { sell_tier?: string | null }).sell_tier ?? null,
+        momentum: r.momentum,
+        market_cap: Number(r.market_cap),
+        price_change_7d: r.price_change_7d as number | null,
+        buy_tier: (r as { buy_tier?: string | null }).buy_tier ?? null,
       });
       priorByCoin.set(r.coin_id, list);
     }
@@ -165,9 +182,55 @@ Deno.serve(async (req) => {
     }
 
     const alerts: object[] = [];
+    let buy_now_count = 0;
     for (const snap of snapshots) {
       const history = priorByCoin.get(snap.coin_id) ?? [];
-      const prev = history[0]; // already ordered desc
+      const prev = history[0]; // query ordered desc by date
+
+      const latestPrior = [...history].sort((a, b) => b.date.localeCompare(a.date))[0];
+      const p7lp = latestPrior?.price_change_7d ?? 0;
+      const latestTier = latestPrior
+        ? (latestPrior.buy_tier ??
+          assignTradeLevels(latestPrior.signal, latestPrior.score, latestPrior.momentum, p7lp, latestPrior.days).buy_tier)
+        : null;
+      const prevCompelling = latestPrior
+        ? qualifiesCompellingBuy({
+          market_cap: latestPrior.market_cap,
+          score: latestPrior.score,
+          momentum: latestPrior.momentum,
+          signal: latestPrior.signal,
+          buy_tier: latestTier,
+          price_change_7d: p7lp,
+        })
+        : false;
+      const nowCompelling = qualifiesCompellingBuy({
+        market_cap: snap.market_cap,
+        score: snap.score,
+        momentum: snap.momentum,
+        signal: snap.signal,
+        buy_tier: snap.buy_tier ?? null,
+        price_change_7d: snap.price_change_7d ?? 0,
+      });
+      if (nowCompelling && !prevCompelling) {
+        buy_now_count++;
+        alerts.push({
+          coin_id: snap.coin_id,
+          symbol: snap.symbol,
+          name: snap.name,
+          alert_type: "buy_now",
+          old_value: latestPrior ? "below_compelling_buy_threshold" : "new_on_watchlist",
+          new_value: formatBuyNowSummary({
+            symbol: snap.symbol,
+            buy_tier: snap.buy_tier,
+            market_cap: snap.market_cap,
+            score: snap.score,
+            momentum: snap.momentum,
+            price_change_7d: snap.price_change_7d ?? 0,
+          }),
+          score: snap.score,
+          price: snap.price,
+        });
+      }
 
       if (Math.abs(snap._p1h) >= 5) {
         alerts.push({
@@ -251,6 +314,7 @@ Deno.serve(async (req) => {
         success: true,
         monitored: snapshots.length,
         alerts_generated: alerts.length,
+        buy_now_alerts: buy_now_count,
         duration_ms: Date.now() - started,
       }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } },

@@ -90,3 +90,7 @@ After deploying:
 3. The **Buy / exit** column (Scanner + Watchlist) should be populated.
 4. In the **Alerts** tab, watch for `exit_now` events when a watchlist coin
    crosses into Critical/Strong exit.
+5. **`buy_now` alerts** — green banner + “BUY” badge on the Alerts tab: small/mid
+   cap (about USD 30M–350M), score ≥ 7, momentum ≥ +2, strong buy tier, and
+   7d move not extended. Emitted on the **first** transition into that state
+   (scan or monitor).

@@ -6,6 +6,8 @@ import {
   classify,
   computeRiskZone,
   computeScore,
+  formatBuyNowSummary,
+  qualifiesCompellingBuy,
 } from "../_shared/scoring.ts";
 
 const corsHeaders = {
@@ -95,14 +97,35 @@ Deno.serve(async (req) => {
     const ids = qualified.map((c) => c.id);
     const { data: priorRows } = await supabase
       .from("asset_snapshots")
-      .select("coin_id, snapshot_date, score, days_in_accumulation")
+      .select(
+        "coin_id, snapshot_date, score, days_in_accumulation, signal, momentum, market_cap, price_change_7d, buy_tier",
+      )
       .in("coin_id", ids)
       .gte("snapshot_date", new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10));
 
-    const priorByCoin = new Map<string, { date: string; score: number; days: number }[]>();
+    type PriorSnap = {
+      date: string;
+      score: number;
+      days: number;
+      signal: string;
+      momentum: number;
+      market_cap: number;
+      price_change_7d: number | null;
+      buy_tier: string | null;
+    };
+    const priorByCoin = new Map<string, PriorSnap[]>();
     for (const r of priorRows ?? []) {
       const list = priorByCoin.get(r.coin_id) ?? [];
-      list.push({ date: r.snapshot_date as string, score: r.score, days: r.days_in_accumulation });
+      list.push({
+        date: r.snapshot_date as string,
+        score: r.score,
+        days: r.days_in_accumulation,
+        signal: r.signal as string,
+        momentum: r.momentum,
+        market_cap: Number(r.market_cap),
+        price_change_7d: r.price_change_7d as number | null,
+        buy_tier: (r as { buy_tier?: string | null }).buy_tier ?? null,
+      });
       priorByCoin.set(r.coin_id, list);
     }
 
@@ -231,6 +254,59 @@ Deno.serve(async (req) => {
     }
 
     const alerts: object[] = [];
+    let buy_now_count = 0;
+
+    // High-visibility "time to buy" — small/mid cap + strong tier + momentum (all coins, not only watchlist)
+    for (const r of rows) {
+      const hist = (priorByCoin.get(r.coin_id) ?? [])
+        .filter((h) => h.date < today)
+        .sort((a, b) => a.date.localeCompare(b.date));
+      const prev = hist[hist.length - 1];
+      const p7p = prev?.price_change_7d ?? 0;
+      const prevTier = prev
+        ? (prev.buy_tier ??
+          assignTradeLevels(prev.signal, prev.score, prev.momentum, p7p, prev.days).buy_tier)
+        : null;
+      const prevQ = prev
+        ? qualifiesCompellingBuy({
+          market_cap: prev.market_cap,
+          score: prev.score,
+          momentum: prev.momentum,
+          signal: prev.signal,
+          buy_tier: prevTier,
+          price_change_7d: p7p,
+        })
+        : false;
+      const nowQ = qualifiesCompellingBuy({
+        market_cap: r.market_cap,
+        score: r.score,
+        momentum: r.momentum,
+        signal: r.signal,
+        buy_tier: r.buy_tier ?? null,
+        price_change_7d: r.price_change_7d ?? 0,
+      });
+      if (nowQ && !prevQ) {
+        buy_now_count++;
+        alerts.push({
+          coin_id: r.coin_id,
+          symbol: r.symbol,
+          name: r.name,
+          alert_type: "buy_now",
+          old_value: prev ? "below_compelling_buy_threshold" : "first_scan",
+          new_value: formatBuyNowSummary({
+            symbol: r.symbol,
+            buy_tier: r.buy_tier,
+            market_cap: r.market_cap,
+            score: r.score,
+            momentum: r.momentum,
+            price_change_7d: r.price_change_7d ?? 0,
+          }),
+          score: r.score,
+          price: r.price,
+        });
+      }
+    }
+
     for (const r of rows) {
       if (!watchedIds.has(r.coin_id)) continue;
       const prev = prevByCoin.get(r.coin_id);
@@ -306,6 +382,7 @@ Deno.serve(async (req) => {
         watchlist_added: toAdd.length,
         watchlist_deactivated: toDeactivate.length,
         alerts_generated: alerts.length,
+        buy_now_alerts: buy_now_count,
         duration_ms: Date.now() - started,
       }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } },

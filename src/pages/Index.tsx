@@ -37,6 +37,7 @@ import {
   Repeat2,
   Zap,
   Clock,
+  ShoppingCart,
   ChevronDown,
   ChevronRight,
   Check,
@@ -365,8 +366,10 @@ const Index = () => {
         body: { triggered_by: "manual" },
       });
       if (error) throw error;
+      const bn = typeof data?.buy_now_alerts === "number" ? data.buy_now_alerts : 0;
       toast.success(
-        `Scan complete · ${data.qualified}/${data.scanned} qualified · +${data.watchlist_added ?? 0} to watchlist · ${data.alerts_generated ?? 0} alerts`
+        `Scan complete · ${data.qualified}/${data.scanned} qualified · +${data.watchlist_added ?? 0} to watchlist · ${data.alerts_generated ?? 0} alerts` +
+          (bn > 0 ? ` · ${bn} buy-now (check banner)` : ""),
       );
       await Promise.all([load(), loadWatchlist(), loadAlerts()]);
     } catch (e) {
@@ -382,7 +385,11 @@ const Index = () => {
     try {
       const { data, error } = await supabase.functions.invoke("monitor-watchlist", {});
       if (error) throw error;
-      toast.success(`Monitor complete · ${data.monitored} coins · ${data.alerts_generated} alerts`);
+      const bn = typeof data?.buy_now_alerts === "number" ? data.buy_now_alerts : 0;
+      toast.success(
+        `Monitor complete · ${data.monitored} coins · ${data.alerts_generated} alerts` +
+          (bn > 0 ? ` · ${bn} buy-now` : ""),
+      );
       await Promise.all([loadWatchlist(), loadAlerts()]);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Monitor failed");
@@ -440,6 +447,14 @@ const Index = () => {
     return mins < 60;
   }).length;
 
+  const withinHours = (iso: string, h: number) =>
+    Date.now() - new Date(iso).getTime() < h * 3600000;
+
+  const buyNowAlerts = useMemo(
+    () => alerts.filter((a) => a.alert_type === "buy_now" && withinHours(a.created_at, 72)),
+    [alerts],
+  );
+
   return (
     <div className="min-h-screen">
       <header className="border-b border-border/60 bg-card/40 backdrop-blur">
@@ -472,6 +487,47 @@ const Index = () => {
       </header>
 
       <main className="container py-8 space-y-6">
+        {buyNowAlerts.length > 0 && (
+          <div
+            role="alert"
+            className="rounded-xl border-2 border-emerald-500 bg-gradient-to-br from-emerald-500/25 via-emerald-400/15 to-background p-4 md:p-5 shadow-[0_0_24px_-4px_rgba(16,185,129,0.45)] ring-2 ring-emerald-400/40"
+          >
+            <div className="flex flex-col sm:flex-row sm:items-start gap-4">
+              <div className="flex size-12 shrink-0 items-center justify-center rounded-lg bg-emerald-600 text-white shadow-lg">
+                <ShoppingCart className="size-7" strokeWidth={2.5} />
+              </div>
+              <div className="min-w-0 flex-1 space-y-2">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-sm font-bold uppercase tracking-wide text-emerald-800 dark:text-emerald-200">
+                    Time to buy
+                  </span>
+                  <span className="rounded-md bg-emerald-600 px-2 py-0.5 text-[10px] font-bold uppercase text-white">
+                    Small cap · high conviction
+                  </span>
+                </div>
+                <p className="text-sm text-foreground/90">
+                  These names crossed into a strong buy window (typically mcap under ~$350M, score ≥ 7, momentum building, not chasing a vertical pump).
+                  Open the Alerts tab for details, then expand the row in Scanner for entry, stop, and target.
+                </p>
+                <ul className="space-y-2">
+                  {buyNowAlerts.slice(0, 3).map((a) => (
+                    <li
+                      key={a.id}
+                      className="rounded-lg border border-emerald-500/40 bg-card/80 px-3 py-2 text-sm font-medium leading-snug"
+                    >
+                      <span className="text-emerald-700 dark:text-emerald-300">{a.symbol}</span>
+                      <span className="text-muted-foreground font-normal"> — {a.new_value}</span>
+                    </li>
+                  ))}
+                </ul>
+                {buyNowAlerts.length > 3 && (
+                  <p className="text-xs text-muted-foreground">+{buyNowAlerts.length - 3} more in Alerts tab</p>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Stats */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
           <StatCard icon={<Activity className="size-4" />} label="Universe" value={rows.length.toString()} />
@@ -495,6 +551,11 @@ const Index = () => {
             </TabsTrigger>
             <TabsTrigger value="alerts">
               <Bell className="size-3.5 mr-1.5" /> Alerts
+              {buyNowAlerts.length > 0 && (
+                <span className="ml-1.5 bg-emerald-500 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full shadow-sm shadow-emerald-500/50 animate-pulse">
+                  BUY {buyNowAlerts.length}
+                </span>
+              )}
               {newAlertsCount > 0 && (
                 <span className="ml-1.5 bg-destructive/20 text-destructive text-[10px] font-semibold px-1.5 py-0.5 rounded-full">
                   {newAlertsCount}
@@ -792,13 +853,42 @@ const Index = () => {
           <TabsContent value="alerts" className="space-y-4">
             <div className="flex items-center justify-between">
               <p className="text-sm text-muted-foreground">
-                Signal and score change events for watchlisted coins
+                <strong className="text-foreground">Time to buy</strong> highlights small/mid-cap high-conviction entries.
+                Other rows are watchlist activity (signals, score, spikes, exits).
               </p>
               <Button onClick={loadAlerts} size="sm" variant="outline" disabled={alertsLoading}>
                 <RefreshCw className={`size-4 mr-2 ${alertsLoading ? "animate-spin" : ""}`} />
                 Refresh
               </Button>
             </div>
+
+            {!alertsLoading && buyNowAlerts.length > 0 && (
+              <div className="rounded-xl border-2 border-emerald-500 bg-emerald-500/10 p-4 space-y-3">
+                <h3 className="text-sm font-bold flex items-center gap-2 text-emerald-800 dark:text-emerald-200">
+                  <ShoppingCart className="size-5" />
+                  When to buy (last 72h)
+                </h3>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  {buyNowAlerts.map((a) => (
+                    <div
+                      key={a.id}
+                      className="rounded-lg border border-emerald-500/50 bg-card p-3 shadow-md"
+                    >
+                      <div className="flex items-center justify-between gap-2 mb-1">
+                        <span className="font-bold text-lg">{a.symbol}</span>
+                        <span className="text-[10px] text-muted-foreground tabular">{fmt.time(a.created_at)}</span>
+                      </div>
+                      <p className="text-xs text-muted-foreground mb-2">{a.name}</p>
+                      <p className="text-sm leading-snug">{a.new_value}</p>
+                      <div className="mt-2 flex gap-3 text-xs tabular">
+                        <span>Score <strong>{a.score ?? "—"}</strong></span>
+                        <span>Price <strong>{a.price ? fmt.price(a.price) : "—"}</strong></span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
 
             <div className="rounded-lg border border-border bg-card overflow-hidden shadow-[var(--shadow-card)]">
               <Table>
@@ -807,7 +897,7 @@ const Index = () => {
                     <TableHead className="text-xs">Time</TableHead>
                     <TableHead className="text-xs">Asset</TableHead>
                     <TableHead className="text-xs">Event</TableHead>
-                    <TableHead className="text-xs">Change</TableHead>
+                    <TableHead className="text-xs">Detail</TableHead>
                     <TableHead className="text-right text-xs">Score</TableHead>
                     <TableHead className="text-right text-xs">Price</TableHead>
                   </TableRow>
@@ -822,8 +912,16 @@ const Index = () => {
                       </TableCell>
                     </TableRow>
                   ) : (
-                    alerts.map((a) => (
-                      <TableRow key={a.id} className="border-border">
+                    [...alerts].sort((a, b) => {
+                      const pri = (t: string) => (t === "buy_now" ? 0 : 1);
+                      const p = pri(a.alert_type) - pri(b.alert_type);
+                      if (p !== 0) return p;
+                      return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+                    }).map((a) => (
+                      <TableRow
+                        key={a.id}
+                        className={`border-border ${a.alert_type === "buy_now" ? "bg-emerald-500/15 border-l-4 border-l-emerald-500" : ""}`}
+                      >
                         <TableCell className="text-xs text-muted-foreground whitespace-nowrap">{fmt.time(a.created_at)}</TableCell>
                         <TableCell>
                           <div className="font-medium">{a.symbol}</div>
@@ -832,13 +930,15 @@ const Index = () => {
                         <TableCell>
                           <AlertIcon type={a.alert_type} />
                         </TableCell>
-                        <TableCell className="text-sm">
+                        <TableCell className="text-sm max-w-md">
                           {a.alert_type === "signal_change" ? (
                             <span>
                               <SignalBadge signal={a.old_value ?? ""} />
                               <span className="mx-1 text-muted-foreground">→</span>
                               <SignalBadge signal={a.new_value ?? ""} />
                             </span>
+                          ) : a.alert_type === "buy_now" ? (
+                            <span className="text-foreground font-medium leading-snug">{a.new_value}</span>
                           ) : (
                             <span className={a.alert_type === "score_up" ? "text-success" : "text-destructive"}>
                               {a.old_value} → {a.new_value}
@@ -861,6 +961,11 @@ const Index = () => {
 };
 
 const AlertIcon = ({ type }: { type: string }) => {
+  if (type === "buy_now") return (
+    <span className="inline-flex items-center gap-1.5 rounded-md bg-emerald-600 px-2 py-1 text-[11px] font-bold uppercase tracking-wide text-white shadow-sm">
+      <ShoppingCart className="size-3.5" /> Buy now
+    </span>
+  );
   if (type === "exit_now") return (
     <span className="inline-flex items-center gap-1 text-xs text-destructive font-semibold">
       <AlertTriangle className="size-3" /> Exit now

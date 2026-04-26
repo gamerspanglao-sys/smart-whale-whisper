@@ -203,6 +203,51 @@ export function assignTradeLevels(
   return { buy_tier: "No setup — wait", sell_tier: null };
 }
 
+/** Upper mcap for "small / mid" compelling-buy alerts (below large-cap slow grinders). */
+export const COMPELLING_BUY_MCAP_MAX = 350_000_000;
+
+export interface CompellingBuyInput {
+  market_cap: number;
+  score: number;
+  momentum: number;
+  signal: string;
+  buy_tier: string | null;
+  price_change_7d: number;
+}
+
+/**
+ * High-conviction buy opportunity on a smaller market cap.
+ * Fires only when score is building, tier is strong, and we are not chasing a vertical move.
+ */
+export function qualifiesCompellingBuy(d: CompellingBuyInput): boolean {
+  if (d.signal === "Avoid") return false;
+  if (d.market_cap < 30_000_000 || d.market_cap > COMPELLING_BUY_MCAP_MAX) return false;
+  if (d.score < 7) return false;
+  if (d.momentum < 2) return false;
+  if (d.price_change_7d > 12 || d.price_change_7d < -8) return false;
+  const t = d.buy_tier ?? "";
+  if (t.startsWith("Very strong")) return true;
+  if (t.startsWith("Strong buy")) return true;
+  if (d.signal === "Strong" && d.score >= 8 && d.momentum >= 2) return true;
+  return false;
+}
+
+/** Short line for alert list; full numbers in expanded UI / Scanner. */
+export function formatBuyNowSummary(p: {
+  symbol: string;
+  buy_tier: string | null;
+  market_cap: number;
+  score: number;
+  momentum: number;
+  price_change_7d: number;
+}): string {
+  const m = p.market_cap >= 1e9 ? `${(p.market_cap / 1e9).toFixed(2)}B` : `${Math.round(p.market_cap / 1e6)}M`;
+  const tier = p.buy_tier ?? "Compelling buy";
+  const mom = p.momentum >= 0 ? `+${p.momentum}` : String(p.momentum);
+  const p7 = `${p.price_change_7d >= 0 ? "+" : ""}${p.price_change_7d.toFixed(1)}%`;
+  return `${tier} · ${p.symbol} · $${m} cap · score ${p.score} · mom ${mom} · 7d ${p7} — open Scanner for entry / stop / target`;
+}
+
 /**
  * Suggested risk zone. Stop is the tighter of (volatility-based) and (recent swing-low × 0.98).
  * Target is a 3R multiple of that risk, floored at 15% so it's meaningful for slow movers.
